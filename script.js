@@ -409,6 +409,11 @@ function updateReorderList() {
     const list = document.getElementById("reorderList");
     list.innerHTML = "";
 
+    // Shared across all items in this render (touch events only fire on the
+    // item where the touch began, so this closure variable tracks which
+    // item's drag is in progress).
+    let touchReorderFromIdx = null;
+
     route.forEach((point, idx) => {
         const item = document.createElement("div");
         item.className = "waypoint-item";
@@ -420,6 +425,7 @@ function updateReorderList() {
             item.textContent = `${idx + 1}. ${address}`;
         });
 
+        // Desktop: HTML5 drag-and-drop
         item.addEventListener("dragstart", (e) => {
             e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.setData("text/plain", idx);
@@ -447,6 +453,48 @@ function updateReorderList() {
                 updateMarkers();
                 updateReorderList();
             }
+        });
+
+        // Mobile: HTML5 drag-and-drop has no touch equivalent on iOS
+        // Safari/Chrome Android - dragstart never fires from a touch
+        // gesture, so reordering was completely non-functional on phones.
+        item.addEventListener("touchstart", () => {
+            touchReorderFromIdx = parseInt(item.dataset.index);
+            item.classList.add("dragging");
+        }, { passive: true });
+
+        item.addEventListener("touchmove", (e) => {
+            if (touchReorderFromIdx === null) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const target = document.elementFromPoint(touch.clientX, touch.clientY);
+            const targetItem = target && target.closest(".waypoint-item");
+            if (targetItem && targetItem !== item) {
+                const targetIdx = parseInt(targetItem.dataset.index);
+                if (targetIdx < touchReorderFromIdx) {
+                    list.insertBefore(item, targetItem);
+                } else {
+                    list.insertBefore(item, targetItem.nextSibling);
+                }
+            }
+        }, { passive: false });
+
+        item.addEventListener("touchend", async () => {
+            if (touchReorderFromIdx === null) return;
+            item.classList.remove("dragging");
+            touchReorderFromIdx = null;
+
+            // Read the final on-screen order back into the route array -
+            // each item's dataset.index still reflects its ORIGINAL
+            // position, only DOM order changed during the drag.
+            const newOrder = Array.from(list.children).map(el => parseInt(el.dataset.index));
+            const reordered = newOrder.map(i => route[i]);
+            route.length = 0;
+            route.push(...reordered);
+
+            await rebuildRoute();
+            updateMarkers();
+            updateReorderList();
         });
 
         list.appendChild(item);
@@ -594,7 +642,7 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
     const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
     const mapPoint = [point.lng, point.lat];
 
-    let nearestDist = getHitRadiusDegrees(28);
+    let nearestDist = getHitRadiusDegrees(40);
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
@@ -634,14 +682,23 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
     }
 }, false);
 
-document.getElementById("map").addEventListener("touchend", async (e) => {
+function endTouchDrag() {
     isTouchDown = false;
     if (isDraggingLine) {
         isDraggingLine = false;
         draggedPointIndex = -1;
     }
     touchStartPoint = null;
-}, false);
+}
+
+document.getElementById("map").addEventListener("touchend", endTouchDrag, false);
+
+// touchcancel fires INSTEAD of touchend when the OS interrupts a gesture
+// mid-drag (incoming call, notification-shade swipe, back-gesture, app
+// switch). Without handling it, isTouchDown/touchStartPoint/draggedPointIndex
+// stay stuck exactly like the mouse-drag bug fixed via window "blur" - the
+// touch equivalent of that same failure mode.
+document.addEventListener("touchcancel", endTouchDrag, false);
 
 // Buttons
 document.getElementById("toggleFollowRoads").addEventListener("click", async function () {
@@ -665,13 +722,23 @@ document.getElementById("closeLoopBtn").addEventListener("click", closeLoop);
 
 document.getElementById("paceInput").addEventListener("change", debounce(updateHUD, 100));
 
-document.getElementById("searchInput").addEventListener("keypress", async function (e) {
-    if (e.key === "Enter" && this.value.trim()) {
-        const coords = await searchPlace(this.value);
-        if (coords) {
-            this.value = "";
-        }
-    }
+async function triggerSearch(input) {
+    if (!input.value.trim()) return;
+    const coords = await searchPlace(input.value);
+    if (coords) input.value = "";
+}
+
+document.getElementById("searchInput").addEventListener("keypress", (e) => {
+    if (e.key === "Enter") triggerSearch(e.target);
+});
+
+// type="search" fires a native "search" event when the mobile keyboard's
+// Go/Search action button is tapped, or the field's X is used to clear it.
+// keypress "Enter" is unreliable across mobile keyboards/IMEs (varies by
+// keyboard app, voice input, autocomplete-suggestion taps) - "search" is
+// the platform-native signal and works as a fallback either way covers it.
+document.getElementById("searchInput").addEventListener("search", (e) => {
+    triggerSearch(e.target);
 });
 
 document.getElementById("hudToggle").addEventListener("click", function () {
