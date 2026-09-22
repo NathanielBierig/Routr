@@ -14,6 +14,11 @@ const map = new mapboxgl.Map({
 const route = [];
 const currentPoints = [];
 
+// accumulated road-snapped route + running totals across all legs
+let roadRoute = [];
+let totalDistance = 0;
+let totalDuration = 0;
+
 // road route func:
 async function getRoadRoute() {
     if (currentPoints.length < 2) {
@@ -36,18 +41,25 @@ async function getRoadRoute() {
     console.log("Directions:", data);
 
     if (data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
+        const leg = data.routes[0];
+        const legCoords = leg.geometry.coordinates;
 
-        console.log("ROAD ROUTE:", route.geometry);
+        // Each new leg starts where the previous one ended, so drop its
+        // first coordinate (except for the very first leg) to avoid a
+        // duplicate point at the join.
+        roadRoute.push(...(roadRoute.length === 0 ? legCoords : legCoords.slice(1)));
+
+        totalDistance += leg.distance;
+        totalDuration += leg.duration;
 
         map.getSource("route").setData({
             type: "Feature",
-            geometry: route.geometry
+            geometry: { type: "LineString", coordinates: roadRoute }
         });
 
-        // Calculate display values
-        const distanceKm = route.distance / 1000;
-        const walkingMinutes = route.duration / 60;
+        // Calculate display values from the running totals
+        const distanceKm = totalDistance / 1000;
+        const walkingMinutes = totalDuration / 60;
 
         // Update HUD
         document.getElementById("distance").textContent =
@@ -55,9 +67,6 @@ async function getRoadRoute() {
 
         document.getElementById("time").textContent =
             `Walking: ${Math.round(walkingMinutes)} min`;
-    
-
-        console.log("ROAD ROUTE:", route.geometry);
 
     } else {
         console.log("No route found:", data);
