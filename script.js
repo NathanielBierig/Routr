@@ -387,6 +387,20 @@ function closeLoop() {
     }
 }
 
+async function getAddressFromCoords(lng, lat) {
+    try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxgl.accessToken}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.features && data.features.length > 0) {
+            return data.features[0].place_name || `Point ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        }
+    } catch (err) {
+        console.error("Reverse geocoding failed:", err);
+    }
+    return `Point ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+}
+
 function updateReorderList() {
     const list = document.getElementById("reorderList");
     list.innerHTML = "";
@@ -396,7 +410,11 @@ function updateReorderList() {
         item.className = "waypoint-item";
         item.draggable = true;
         item.dataset.index = idx;
-        item.textContent = `${idx + 1}. [${point[0].toFixed(4)}, ${point[1].toFixed(4)}]`;
+
+        // Show address instead of coordinates
+        getAddressFromCoords(point[0], point[1]).then(address => {
+            item.textContent = `${idx + 1}. ${address}`;
+        });
 
         item.addEventListener("dragstart", (e) => {
             e.dataTransfer.effectAllowed = "move";
