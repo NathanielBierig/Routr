@@ -139,10 +139,13 @@ async function rebuildRoute() {
     totalDuration = 0;
 
     if (route.length < 2) {
+        console.log("Route has <2 points, skipping rebuild");
         updateLayers();
         updateHUD();
         return;
     }
+
+    console.log("Rebuilding route with", route.length, "points");
 
     // Get road routes for each leg
     for (let i = 0; i < route.length - 1; i++) {
@@ -157,9 +160,13 @@ async function rebuildRoute() {
             roadRoute.push(...coords);
             totalDistance += legData.distance;
             totalDuration += legData.duration;
+            console.log("Leg", i, "added. Total legs:", legs.length);
+        } else {
+            console.warn("Failed to get route data for leg", i);
         }
     }
 
+    console.log("Route rebuild complete. Legs:", legs.length, "Total distance:", totalDistance);
     updateLayers();
     updateHUD();
 }
@@ -173,12 +180,15 @@ function updateLayers() {
         });
     }
 
+    console.log("Updating layers. Total legs to render:", legs.length);
     // Update individual leg layers (for different colors)
     legs.forEach((leg, idx) => {
         const layerId = `route-leg-${idx}`;
         const sourceId = `route-source-${idx}`;
+        const color = legColors[idx % legColors.length];
 
         if (!map.getSource(sourceId)) {
+            console.log("Creating new layer", layerId, "with color", color);
             map.addSource(sourceId, {
                 type: "geojson",
                 data: {
@@ -192,11 +202,12 @@ function updateLayers() {
                 source: sourceId,
                 paint: {
                     "line-width": 8,
-                    "line-color": legColors[idx % legColors.length],
+                    "line-color": color,
                     "line-opacity": 1
                 }
             });
         } else {
+            console.log("Updating existing layer", layerId);
             map.getSource(sourceId).setData({
                 type: "Feature",
                 geometry: { type: "LineString", coordinates: leg.coordinates }
@@ -453,12 +464,14 @@ function distance(p1, p2) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-// Single unified click handler - add points or start drag
+// Single unified click handler - add points
 map.on("click", async function (event) {
     if (!isDrawingMode) return;
 
     const point = [event.lngLat.lng, event.lngLat.lat];
+    console.log("Click detected, adding point:", point);
     await addPoint(point);
+    console.log("Route now has", route.length, "points");
 });
 
 // Drag handling for sculpting
