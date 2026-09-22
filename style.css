@@ -37,8 +37,8 @@ body {
     #hud {
         top: 10px;
         left: 10px;
-        right: 10px;
-        max-width: none;
+        right: auto;
+        max-width: 280px;
         padding: 12px;
         font-size: 11px;
     }

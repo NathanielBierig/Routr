@@ -94,7 +94,15 @@ async function searchPlace(query) {
         if (data.features && data.features.length > 0) {
             const feature = data.features[0];
             const coords = [feature.center[0], feature.center[1]];
+            const placeName = feature.place_name || feature.text || query;
+
             map.flyTo({ center: coords, zoom: 14 });
+
+            // Show confirmation of searched place
+            const searchInput = document.getElementById("searchInput");
+            searchInput.placeholder = `Located: ${placeName}`;
+            searchInput.value = "";
+
             return coords;
         }
     } catch (err) {
@@ -189,9 +197,10 @@ function updateLayers() {
                 type: "line",
                 source: sourceId,
                 paint: {
-                    "line-width": 8,
+                    "line-width": 10,
                     "line-color": legColors[idx % legColors.length],
-                    "line-opacity": 1
+                    "line-opacity": 1,
+                    "line-blur": 0.5
                 }
             });
         } else {
