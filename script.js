@@ -170,7 +170,7 @@ function updateLayers() {
 }
 
 function drawFreehandLine(point) {
-    if (!isDrawingFreehand || !isDrawingMode) return;
+    if (!isDrawingFreehand) return;
 
     freehandPath.push(point);
 
@@ -413,23 +413,32 @@ map.on("click", async function (event) {
 
 // Mouse down to start freehand drawing
 map.on("mousedown", function (event) {
-    if (!isDrawingMode || !isDrawingMode) return;
+    if (!isDrawingMode) return;
     isDrawingFreehand = true;
     freehandPath = [[event.lngLat.lng, event.lngLat.lat]];
 });
 
-// Mouse move for freehand drawing
-map.on("mousemove", function (event) {
+// Mouse move for freehand drawing or sculpting
+map.on("mousemove", async function (event) {
     if (isDrawingFreehand) {
         drawFreehandLine([event.lngLat.lng, event.lngLat.lat]);
     }
+    if (isDraggingLine && draggedPointIndex !== -1) {
+        route[draggedPointIndex] = [event.lngLat.lng, event.lngLat.lat];
+        await rebuildRoute();
+        updateMarkers();
+    }
 });
 
-// Mouse up to finish freehand drawing
+// Mouse up to finish freehand drawing or sculpting
 map.on("mouseup", function () {
     if (isDrawingFreehand) {
         isDrawingFreehand = false;
         finalizeFreehandPath();
+    }
+    if (isDraggingLine) {
+        isDraggingLine = false;
+        draggedPointIndex = -1;
     }
 });
 
