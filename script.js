@@ -25,6 +25,7 @@ let isDraggingLine = false;
 let draggedPointIndex = -1;
 let freehandPath = [];
 let isDrawingFreehand = false;
+let isLoading = false;
 
 // Neon colors for legs (cycle through)
 const legColors = [
@@ -42,6 +43,20 @@ function debounce(fn, delay) {
         clearTimeout(timeout);
         timeout = setTimeout(() => fn.apply(this, args), delay);
     };
+}
+
+function showLoading() {
+    isLoading = true;
+    const map_el = document.getElementById("map");
+    map_el.style.opacity = "0.7";
+    map_el.style.pointerEvents = "none";
+}
+
+function hideLoading() {
+    isLoading = false;
+    const map_el = document.getElementById("map");
+    map_el.style.opacity = "1";
+    map_el.style.pointerEvents = "auto";
 }
 
 function updateHUD() {
@@ -190,6 +205,8 @@ async function rebuildRoute() {
         return;
     }
 
+    showLoading();
+
     // Get road routes for each leg
     for (let i = 0; i < route.length - 1; i++) {
         const legData = await getRoadRoute(i, i + 1);
@@ -208,6 +225,7 @@ async function rebuildRoute() {
 
     updateLayers();
     updateHUD();
+    hideLoading();
 }
 
 function updateLayers() {
