@@ -24,6 +24,16 @@ let isDraggingLine = false;
 let draggedPointIndex = -1;
 let isLoading = false;
 
+// Freehand draw mode: lock the map (no panning), drag to trace a path
+// (e.g. loop around a park), release to commit it as straight-line
+// segments between the captured points - distance "as the crow flies"
+// leg by leg, which in aggregate approximates the traced path closely.
+let isFreehandMode = false;
+let isCapturingFreehand = false;
+let freehandCapturePath = [];
+let followRoadsBeforeFreehand = true;
+const MIN_FREEHAND_POINT_METERS = 4;
+
 // Neon colors for legs (cycle through)
 const legColors = [
     '#FF006E', '#FB5607', '#FFBE0B', '#8338EC',
@@ -87,13 +97,28 @@ function updateMarkers() {
         el.style.backgroundColor = color;
         el.style.borderRadius = '50%';
         el.style.border = `${borderWidth} solid white`;
-        el.style.cursor = 'pointer';
+        el.style.cursor = 'grab';
         el.style.boxShadow = `0 0 8px ${color}80`;
         el.style.transition = 'box-shadow 0.2s';
 
-        const marker = new mapboxgl.Marker({ element: el })
+        // Existing waypoints are draggable in place - dragging a point
+        // moves it and both adjacent legs (its own leg-in and leg-out)
+        // rebuild automatically since rebuildRoute() always recomputes
+        // every leg from the current route array.
+        const marker = new mapboxgl.Marker({ element: el, draggable: true })
             .setLngLat(point)
             .addTo(map);
+
+        marker.on('dragstart', () => { el.style.cursor = 'grabbing'; });
+
+        marker.on('dragend', async () => {
+            el.style.cursor = 'grab';
+            const lngLat = marker.getLngLat();
+            route[idx] = [lngLat.lng, lngLat.lat];
+            await rebuildRoute();
+            updateMarkers();
+        });
+
         markers.push(marker);
     });
 }
@@ -177,6 +202,67 @@ function straightLineLeg(a, b) {
     };
 }
 
+function addFreehandPoint(mapPoint) {
+    if (freehandCapturePath.length > 0) {
+        const last = freehandCapturePath[freehandCapturePath.length - 1];
+        const distMeters = getDistanceInMiles(last[1], last[0], mapPoint[1], mapPoint[0]) * 1609.34;
+        if (distMeters < MIN_FREEHAND_POINT_METERS) return;
+    }
+    freehandCapturePath.push(mapPoint);
+    updateFreehandPreview();
+}
+
+function updateFreehandPreview() {
+    const data = {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: freehandCapturePath }
+    };
+    if (!map.getSource("freehand-preview")) {
+        map.addSource("freehand-preview", { type: "geojson", data });
+        map.addLayer({
+            id: "freehand-preview-line",
+            type: "line",
+            source: "freehand-preview",
+            paint: { "line-width": 6, "line-color": "#00FFFF", "line-opacity": 0.9 }
+        });
+    } else {
+        map.getSource("freehand-preview").setData(data);
+    }
+}
+
+function clearFreehandPreview() {
+    freehandCapturePath = [];
+    if (map.getSource("freehand-preview")) {
+        map.getSource("freehand-preview").setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [] }
+        });
+    }
+}
+
+async function commitFreehandPath() {
+    if (freehandCapturePath.length < 2) {
+        clearFreehandPreview();
+        return;
+    }
+
+    let pointsToAdd = freehandCapturePath;
+    // Skip the first captured point if it's essentially where the route
+    // already ends, to avoid a zero-length leg when continuing a stroke
+    // from the last point.
+    if (route.length > 0) {
+        const lastRoutePoint = route[route.length - 1];
+        const d = getDistanceInMiles(lastRoutePoint[1], lastRoutePoint[0], pointsToAdd[0][1], pointsToAdd[0][0]) * 1609.34;
+        if (d < MIN_FREEHAND_POINT_METERS) pointsToAdd = pointsToAdd.slice(1);
+    }
+
+    route.push(...pointsToAdd);
+    clearFreehandPreview();
+    await rebuildRoute();
+    updateMarkers();
+    updateHUD();
+}
+
 async function getRoadRoute(startIdx, endIdx) {
     if (startIdx >= route.length || endIdx >= route.length) return null;
 
@@ -258,8 +344,10 @@ function updateLayers() {
     }
 
     legs.forEach((leg, idx) => {
-        const layerId = `route-leg-${idx}`;
+        const glowLayerId = `route-leg-glow-${idx}`;
+        const coreLayerId = `route-leg-${idx}`;
         const sourceId = `route-source-${idx}`;
+        const color = legColors[idx % legColors.length];
 
         if (!map.getSource(sourceId)) {
             map.addSource(sourceId, {
@@ -269,15 +357,34 @@ function updateLayers() {
                     geometry: { type: "LineString", coordinates: leg.coordinates }
                 }
             });
+            // Two-layer neon effect: a wide, blurred, low-opacity glow layer
+            // underneath a narrow, fully solid, unblurred core layer. A
+            // single blurred layer (the old approach) reads as bright only
+            // when zoomed in enough that the blur radius is small relative
+            // to the line's screen width; zoomed out, the same blur spreads
+            // the color across a proportionally wider halo at lower opacity
+            // per pixel, so it visually dims toward the dark basemap. The
+            // core layer never blurs, so it stays vividly bright at every
+            // zoom level - the glow is purely additive on top of it.
             map.addLayer({
-                id: layerId,
+                id: glowLayerId,
                 type: "line",
                 source: sourceId,
                 paint: {
-                    "line-width": 10,
-                    "line-color": legColors[idx % legColors.length],
-                    "line-opacity": 1,
-                    "line-blur": 0.5
+                    "line-width": 18,
+                    "line-color": color,
+                    "line-opacity": 0.45,
+                    "line-blur": 3
+                }
+            });
+            map.addLayer({
+                id: coreLayerId,
+                type: "line",
+                source: sourceId,
+                paint: {
+                    "line-width": 5,
+                    "line-color": color,
+                    "line-opacity": 1
                 }
             });
         } else {
@@ -292,7 +399,8 @@ function updateLayers() {
     // or dragging a waypoint out of the route) - these used to stay on the
     // map forever since only add/update was handled above.
     let cleanupIdx = legs.length;
-    while (map.getLayer(`route-leg-${cleanupIdx}`) || map.getSource(`route-source-${cleanupIdx}`)) {
+    while (map.getLayer(`route-leg-glow-${cleanupIdx}`) || map.getLayer(`route-leg-${cleanupIdx}`) || map.getSource(`route-source-${cleanupIdx}`)) {
+        if (map.getLayer(`route-leg-glow-${cleanupIdx}`)) map.removeLayer(`route-leg-glow-${cleanupIdx}`);
         if (map.getLayer(`route-leg-${cleanupIdx}`)) map.removeLayer(`route-leg-${cleanupIdx}`);
         if (map.getSource(`route-source-${cleanupIdx}`)) map.removeSource(`route-source-${cleanupIdx}`);
         cleanupIdx++;
@@ -358,7 +466,8 @@ function clear() {
     // Dynamically remove every route-leg layer/source (no arbitrary bound -
     // the old fixed "i < 10" loop left orphaned layers on longer routes).
     let cleanupIdx = 0;
-    while (map.getLayer(`route-leg-${cleanupIdx}`) || map.getSource(`route-source-${cleanupIdx}`)) {
+    while (map.getLayer(`route-leg-glow-${cleanupIdx}`) || map.getLayer(`route-leg-${cleanupIdx}`) || map.getSource(`route-source-${cleanupIdx}`)) {
+        if (map.getLayer(`route-leg-glow-${cleanupIdx}`)) map.removeLayer(`route-leg-glow-${cleanupIdx}`);
         if (map.getLayer(`route-leg-${cleanupIdx}`)) map.removeLayer(`route-leg-${cleanupIdx}`);
         if (map.getSource(`route-source-${cleanupIdx}`)) map.removeSource(`route-source-${cleanupIdx}`);
         cleanupIdx++;
@@ -561,11 +670,13 @@ function getHitRadiusDegrees(pixelRadius = 18) {
 
 // Single unified click handler - add points
 map.on("click", async function (event) {
+    if (isFreehandMode) return; // freehand only commits via drag, not tap
     const point = [event.lngLat.lng, event.lngLat.lat];
     await addPoint(point);
 });
 
-// Drag handling for sculpting
+// Drag handling for sculpting (and, when isFreehandMode is on, for tracing
+// a freehand path instead)
 let isMouseDown = false;
 let dragStartPoint = null;
 
@@ -575,6 +686,12 @@ document.getElementById("map").addEventListener("mousedown", (e) => {
 
     const point = map.unproject([e.clientX - map.getContainer().getBoundingClientRect().left, e.clientY - map.getContainer().getBoundingClientRect().top]);
     const mapPoint = [point.lng, point.lat];
+
+    if (isFreehandMode) {
+        isCapturingFreehand = true;
+        freehandCapturePath = [mapPoint];
+        return;
+    }
 
     let nearestDist = getHitRadiusDegrees(18);
     let nearestSegment = -1;
@@ -602,10 +719,17 @@ document.getElementById("map").addEventListener("mousedown", (e) => {
 // "blur" fallback for alt-tab/losing focus mid-drag) guarantees the drag
 // always ends cleanly.
 document.addEventListener("mousemove", async (e) => {
-    if (!isMouseDown || !dragStartPoint) return;
+    if (!isMouseDown) return;
 
     const point = map.unproject([e.clientX - map.getContainer().getBoundingClientRect().left, e.clientY - map.getContainer().getBoundingClientRect().top]);
     const mapPoint = [point.lng, point.lat];
+
+    if (isFreehandMode) {
+        if (isCapturingFreehand) addFreehandPoint(mapPoint);
+        return;
+    }
+
+    if (!dragStartPoint) return;
 
     if (draggedPointIndex === -1) {
         draggedPointIndex = dragStartPoint.segment + 1;
@@ -620,6 +744,13 @@ document.addEventListener("mousemove", async (e) => {
 
 function endMouseDrag() {
     isMouseDown = false;
+    if (isFreehandMode) {
+        if (isCapturingFreehand) {
+            isCapturingFreehand = false;
+            commitFreehandPath();
+        }
+        return;
+    }
     if (isDraggingLine) {
         isDraggingLine = false;
         draggedPointIndex = -1;
@@ -642,6 +773,13 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
     const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
     const mapPoint = [point.lng, point.lat];
 
+    if (isFreehandMode) {
+        e.preventDefault();
+        isCapturingFreehand = true;
+        freehandCapturePath = [mapPoint];
+        return;
+    }
+
     let nearestDist = getHitRadiusDegrees(40);
     let nearestSegment = -1;
 
@@ -663,12 +801,21 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
 document.getElementById("map").addEventListener("touchmove", async (e) => {
     if (!isTouchDown) return;
 
+    const touch = e.touches[0];
+    const bounds = map.getContainer().getBoundingClientRect();
+    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+    const mapPoint = [point.lng, point.lat];
+
+    if (isFreehandMode) {
+        if (isCapturingFreehand) {
+            e.preventDefault();
+            addFreehandPoint(mapPoint);
+        }
+        return;
+    }
+
     if (touchStartPoint) {
         e.preventDefault();
-        const touch = e.touches[0];
-        const bounds = map.getContainer().getBoundingClientRect();
-        const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
-        const mapPoint = [point.lng, point.lat];
 
         if (draggedPointIndex === -1) {
             draggedPointIndex = touchStartPoint.segment + 1;
@@ -684,6 +831,13 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
 
 function endTouchDrag() {
     isTouchDown = false;
+    if (isFreehandMode) {
+        if (isCapturingFreehand) {
+            isCapturingFreehand = false;
+            commitFreehandPath();
+        }
+        return;
+    }
     if (isDraggingLine) {
         isDraggingLine = false;
         draggedPointIndex = -1;
@@ -708,6 +862,23 @@ document.getElementById("toggleFollowRoads").addEventListener("click", async fun
     // Re-render the existing route in the new mode immediately, instead of
     // only affecting points added after the toggle.
     await rebuildRoute();
+});
+
+document.getElementById("toggleFreehandBtn").addEventListener("click", function () {
+    isFreehandMode = !isFreehandMode;
+    this.textContent = `Freehand Draw: ${isFreehandMode ? 'ON' : 'OFF'}`;
+    this.classList.toggle("active");
+
+    if (isFreehandMode) {
+        map.dragPan.disable();
+        followRoadsBeforeFreehand = isFollowRoads;
+        isFollowRoads = false; // freehand strokes are always straight legs
+    } else {
+        map.dragPan.enable();
+        isFollowRoads = followRoadsBeforeFreehand;
+        isCapturingFreehand = false;
+        clearFreehandPreview();
+    }
 });
 
 document.getElementById("reorderBtn").addEventListener("click", toggleReorderPanel);
