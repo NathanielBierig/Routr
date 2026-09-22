@@ -48,10 +48,13 @@ let followRoadsBeforeFreehand = true;
 // recognizable path shape while cutting vertex count by ~5x.
 const MIN_FREEHAND_POINT_METERS = 20;
 
-// Neon colors for legs (cycle through)
+// Neon colors for legs (cycle through). Was only 6 truly unique colors
+// padded to array-length 8 by repeating the first two, so any route with
+// 7-8+ legs (a realistic detailed loop) already started repeating a color
+// well before the intended "every 8th leg" recycling.
 const legColors = [
     '#FF006E', '#FB5607', '#FFBE0B', '#8338EC',
-    '#3A86FF', '#06FFA5', '#FF006E', '#FB5607'
+    '#3A86FF', '#06FFA5', '#FF4D9D', '#00D4FF'
 ];
 
 function getPaceInput() {
@@ -117,6 +120,17 @@ function updateMarkers() {
     const borderWidth = window.innerWidth < 768 ? '1.5px' : '2px';
 
     route.forEach((point, idx) => {
+        // Close Loop pushes route[0]'s coordinates again as the final
+        // point, so a closed loop's start and "end" markers land exactly
+        // on top of each other - two different-colored, independently
+        // draggable markers stacked at one spot, impossible to tell apart
+        // or grab the one you mean to. Only render the start marker there;
+        // the loop-closing point still exists in route[]/legs, it's just
+        // not given its own separate marker.
+        if (idx > 0 && idx === route.length - 1 && point[0] === route[0][0] && point[1] === route[0][1]) {
+            return;
+        }
+
         let color = '#888888';
         if (idx === 0) color = '#00AA44';
         else if (idx === route.length - 1) color = '#FF0000';
@@ -461,14 +475,19 @@ function updateLayers() {
             // per pixel, so it visually dims toward the dark basemap. The
             // core layer never blurs, so it stays vividly bright at every
             // zoom level - the glow is purely additive on top of it.
+            // The wide blurred glow is continuous regardless of dash style,
+            // so a fallback leg's dashed core alone was easy to miss at a
+            // glance - the glow made it still read as a mostly-solid band.
+            // Cut the glow's opacity/width sharply for fallback legs so the
+            // dash pattern in the core actually dominates the impression.
             map.addLayer({
                 id: glowLayerId,
                 type: "line",
                 source: sourceId,
                 paint: {
-                    "line-width": 18,
+                    "line-width": leg.isFallback ? 10 : 18,
                     "line-color": color,
-                    "line-opacity": 0.45,
+                    "line-opacity": leg.isFallback ? 0.15 : 0.45,
                     "line-blur": 3
                 }
             });
@@ -493,9 +512,12 @@ function updateLayers() {
                 geometry: { type: "LineString", coordinates: leg.coordinates }
             });
             // A leg's fallback status can change between rebuilds (e.g. a
-            // dragged waypoint now lands on a real mapped path) - keep the
-            // dash style in sync on updates too, not just first creation.
+            // dragged waypoint now lands on a real mapped path) - keep both
+            // layers' fallback styling in sync on updates too, not just
+            // first creation.
             map.setPaintProperty(coreLayerId, "line-dasharray", leg.isFallback ? [2, 2] : [1, 0]);
+            map.setPaintProperty(glowLayerId, "line-width", leg.isFallback ? 10 : 18);
+            map.setPaintProperty(glowLayerId, "line-opacity", leg.isFallback ? 0.15 : 0.45);
         }
     });
 
