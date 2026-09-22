@@ -1,5 +1,3 @@
-console.log("My JavaScript loaded");
-console.log(mapboxgl);
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
 const map = new mapboxgl.Map({
@@ -38,6 +36,14 @@ function getPaceInput() {
     return parseFloat(document.getElementById("paceInput").value) || 5;
 }
 
+function debounce(fn, delay) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
+
 function updateHUD() {
     const distanceKm = totalDistance / 1000;
     const walkingMinutes = totalDuration / 60;
@@ -51,22 +57,26 @@ function updateHUD() {
 }
 
 function updateMarkers() {
-    // Clear existing markers
     markers.forEach(m => m.remove());
     markers = [];
 
+    const markerSize = window.innerWidth < 768 ? '10px' : '12px';
+    const borderWidth = window.innerWidth < 768 ? '1.5px' : '2px';
+
     route.forEach((point, idx) => {
-        let color = '#888888'; // old points - gray
-        if (idx === 0) color = '#00AA44'; // start - green
-        else if (idx === route.length - 1) color = '#FF0000'; // newest - red
+        let color = '#888888';
+        if (idx === 0) color = '#00AA44';
+        else if (idx === route.length - 1) color = '#FF0000';
 
         const el = document.createElement('div');
-        el.style.width = '12px';
-        el.style.height = '12px';
+        el.style.width = markerSize;
+        el.style.height = markerSize;
         el.style.backgroundColor = color;
         el.style.borderRadius = '50%';
-        el.style.border = '2px solid white';
+        el.style.border = `${borderWidth} solid white`;
         el.style.cursor = 'pointer';
+        el.style.boxShadow = `0 0 8px ${color}80`;
+        el.style.transition = 'box-shadow 0.2s';
 
         const marker = new mapboxgl.Marker({ element: el })
             .setLngLat(point)
@@ -76,15 +86,19 @@ function updateMarkers() {
 }
 
 async function searchPlace(query) {
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}`;
-    const response = await fetch(url);
-    const data = await response.json();
+    try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}`;
+        const response = await fetch(url);
+        const data = await response.json();
 
-    if (data.features && data.features.length > 0) {
-        const feature = data.features[0];
-        const coords = [feature.center[0], feature.center[1]];
-        map.flyTo({ center: coords, zoom: 14 });
-        return coords;
+        if (data.features && data.features.length > 0) {
+            const feature = data.features[0];
+            const coords = [feature.center[0], feature.center[1]];
+            map.flyTo({ center: coords, zoom: 14 });
+            return coords;
+        }
+    } catch (err) {
+        console.error("Search failed:", err);
     }
     return null;
 }
@@ -92,24 +106,28 @@ async function searchPlace(query) {
 async function getRoadRoute(startIdx, endIdx) {
     if (startIdx >= route.length || endIdx >= route.length) return null;
 
-    const coordinates = [route[startIdx], route[endIdx]]
-        .map(point => point.join(","))
-        .join(";");
+    try {
+        const coordinates = [route[startIdx], route[endIdx]]
+            .map(point => point.join(","))
+            .join(";");
 
-    const url =
-        `https://api.mapbox.com/directions/v5/mapbox/${isFollowRoads ? 'walking' : 'driving'}/${coordinates}` +
-        `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+        const url =
+            `https://api.mapbox.com/directions/v5/mapbox/${isFollowRoads ? 'walking' : 'driving'}/${coordinates}` +
+            `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
 
-    const response = await fetch(url);
-    const data = await response.json();
+        const response = await fetch(url);
+        const data = await response.json();
 
-    if (data.routes && data.routes.length > 0) {
-        const leg = data.routes[0];
-        return {
-            coordinates: leg.geometry.coordinates,
-            distance: leg.distance,
-            duration: leg.duration
-        };
+        if (data.routes && data.routes.length > 0) {
+            const leg = data.routes[0];
+            return {
+                coordinates: leg.geometry.coordinates,
+                distance: leg.distance,
+                duration: leg.duration
+            };
+        }
+    } catch (err) {
+        console.error("Route request failed:", err);
     }
     return null;
 }
@@ -617,7 +635,7 @@ document.getElementById("clearBtn").addEventListener("click", clear);
 
 document.getElementById("closeLoopBtn").addEventListener("click", closeLoop);
 
-document.getElementById("paceInput").addEventListener("change", updateHUD);
+document.getElementById("paceInput").addEventListener("change", debounce(updateHUD, 100));
 
 document.getElementById("searchInput").addEventListener("keypress", async function (e) {
     if (e.key === "Enter" && this.value.trim()) {
