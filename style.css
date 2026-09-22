@@ -331,7 +331,7 @@ body {
     border-radius: 12px;
     border: 2px solid #00ff88;
     z-index: 100;
-    animation: fadeInOut 3s ease-in-out;
+    animation: fadeInOut 3s ease-in-out forwards;
 }
 
 .help-text {
