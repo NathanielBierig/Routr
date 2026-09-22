@@ -14,6 +14,16 @@ const map = new mapboxgl.Map({
 
 // State
 const route = [];
+// legModes[i] records whether the leg between route[i] and route[i+1] was
+// created as road-snapped (true) or straight-line (false). Previously
+// rebuildRoute() re-derived every leg from a single global isFollowRoads on
+// every call, which meant toggling Follow Roads or Freehand mode silently
+// rewrote ALL existing legs on the next edit - e.g. drawing on roads, then
+// freehand-tracing a park loop, then tapping one more point would re-snap
+// the freehand park legs to the nearest roads, destroying the traced shape.
+// legModes makes mode a property of each leg at creation time, not a global
+// applied retroactively to the whole route.
+const legModes = [];
 const legs = [];
 let roadRoute = [];
 let totalDistance = 0;
@@ -284,6 +294,9 @@ async function commitFreehandPath() {
     }
 
     route.push(...pointsToAdd);
+    // Freehand-committed legs are always straight-line, regardless of the
+    // current Follow Roads setting - that's the whole point of the mode.
+    while (legModes.length < route.length - 1) legModes.push(false);
     clearFreehandPreview();
     await rebuildRoute();
     updateMarkers();
@@ -346,26 +359,33 @@ async function rebuildRoute() {
         return;
     }
 
-    // Captured once, not re-read later: isFollowRoads can change (another
-    // toggle click) while this call is still awaiting API responses. The
-    // old code gated hideLoading() on the CURRENT isFollowRoads instead of
-    // the value that was true when showLoading() actually ran - if a toggle
-    // flipped it to false in between, hideLoading() would never fire and
-    // #map would stay dimmed/disabled permanently.
-    const wasFollowRoads = isFollowRoads;
-    if (wasFollowRoads) showLoading();
+    // Snapshot each leg's own mode up front (falling back to the current
+    // global for any position legModes hasn't caught up with yet, which
+    // shouldn't normally happen but keeps this resilient). isFollowRoads
+    // itself can still change while this call awaits API responses, but
+    // each leg's rendering choice no longer depends on reading it again -
+    // it was decided once, when that leg was created.
+    const legModesSnapshot = [];
+    for (let i = 0; i < route.length - 1; i++) {
+        legModesSnapshot.push(legModes[i] !== undefined ? legModes[i] : isFollowRoads);
+    }
+    const anyRoadSnapped = legModesSnapshot.some(m => m);
+    if (anyRoadSnapped) showLoading();
 
     const newLegs = [];
     let newRoadRoute = [];
     let newTotalDistance = 0;
     let newTotalDuration = 0;
 
-    // Get each leg - road-snapped (API) when Follow Roads is on, straight
-    // line (instant, no API) when it's off. This is the single place that
-    // builds legs, so Undo/Reorder/Click/Sculpt all respect the mode
-    // consistently instead of disagreeing about what "free draw" means.
+    // Get each leg - road-snapped (API) or straight line (instant, no API)
+    // per THAT leg's own recorded mode, not a single global reapplied to
+    // the whole route. This is what lets mixed routes (some legs drawn on
+    // roads, some freehand-traced through a park) survive later edits
+    // (Undo, sculpting, toggling modes, adding more points) without
+    // silently rewriting sections the user already drew.
     for (let i = 0; i < route.length - 1; i++) {
-        const legData = isFollowRoads
+        const legMode = legModesSnapshot[i];
+        const legData = legMode
             ? await getRoadRoute(i, i + 1)
             : straightLineLeg(route[i], route[i + 1]);
 
@@ -376,7 +396,7 @@ async function rebuildRoute() {
         // hideLoading also runs independently - the important thing is this
         // call always clears whatever IT turned on.
         if (myGeneration !== rebuildGeneration) {
-            if (wasFollowRoads) hideLoading();
+            if (anyRoadSnapped) hideLoading();
             return;
         }
 
@@ -395,7 +415,7 @@ async function rebuildRoute() {
     }
 
     if (myGeneration !== rebuildGeneration) {
-        if (wasFollowRoads) hideLoading();
+        if (anyRoadSnapped) hideLoading();
         return;
     }
 
@@ -407,7 +427,7 @@ async function rebuildRoute() {
 
     updateLayers();
     updateHUD();
-    if (isFollowRoads) hideLoading();
+    if (anyRoadSnapped) hideLoading();
 }
 
 function updateLayers() {
@@ -522,6 +542,7 @@ function showSnapIndicator(clickedPoint) {
 
 async function addPoint(point) {
     route.push(point);
+    if (route.length >= 2) legModes.push(isFollowRoads);
 
     if (route.length >= 2) {
         await rebuildRoute();
@@ -536,12 +557,14 @@ function undo() {
     if (route.length === 0) return;
 
     route.pop();
+    if (legModes.length > 0) legModes.pop();
     rebuildRoute();
     updateMarkers();
 }
 
 function clear() {
     route.length = 0;
+    legModes.length = 0;
     legs.length = 0;
     roadRoute = [];
     totalDistance = 0;
@@ -649,6 +672,13 @@ function updateReorderList() {
             if (fromIdx !== toIdx) {
                 const [movedPoint] = route.splice(fromIdx, 1);
                 route.splice(toIdx, 0, movedPoint);
+                // Reordering changes which points are adjacent, so the old
+                // per-leg modes no longer correspond to anything meaningful
+                // - re-derive every leg in the current mode rather than try
+                // to guess which mode a never-before-adjacent pair "should"
+                // use.
+                legModes.length = 0;
+                for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
                 await rebuildRoute();
                 updateMarkers();
                 updateReorderList();
@@ -691,6 +721,8 @@ function updateReorderList() {
             const reordered = newOrder.map(i => route[i]);
             route.length = 0;
             route.push(...reordered);
+            legModes.length = 0;
+            for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
 
             await rebuildRoute();
             updateMarkers();
@@ -768,6 +800,28 @@ function getHitRadiusDegrees(pixelRadius = 18) {
     return meters / 111320;
 }
 
+// Sculpt hit-testing finds the nearest segment in `roadRoute` - the DENSE
+// rendered polyline, where a single road-snapped leg can contribute dozens
+// of coordinate points. That index was being used directly as a `route`
+// (the SPARSE waypoint array) insertion index, which only happened to be
+// correct when every leg was a straight 2-point line (Follow Roads off).
+// With road-snapping on - the default - a click/tap far into a road-snapped
+// leg's polyline could splice the new waypoint into completely the wrong
+// position in `route`, nowhere near where the user actually dragged. This
+// walks `legs[]` to find which leg a roadRoute index actually belongs to,
+// using the same "leg 0 keeps its first point, later legs drop their
+// duplicate first point" accounting rebuildRoute() uses when concatenating
+// legs into roadRoute.
+function roadRouteIndexToLegIndex(roadRouteIdx) {
+    let cursor = 0;
+    for (let i = 0; i < legs.length; i++) {
+        const legLen = i === 0 ? legs[i].coordinates.length : legs[i].coordinates.length - 1;
+        if (roadRouteIdx < cursor + legLen) return i;
+        cursor += legLen;
+    }
+    return Math.max(0, legs.length - 1);
+}
+
 // Single unified click handler - add points
 map.on("click", async function (event) {
     if (isFreehandMode) return; // freehand only commits via drag, not tap
@@ -839,8 +893,11 @@ document.addEventListener("mousemove", async (e) => {
     if (!dragStartPoint) return;
 
     if (draggedPointIndex === -1) {
-        draggedPointIndex = dragStartPoint.segment + 1;
+        const legIdx = roadRouteIndexToLegIndex(dragStartPoint.segment);
+        draggedPointIndex = legIdx + 1;
         route.splice(draggedPointIndex, 0, dragStartPoint.point);
+        const originalMode = legModes[legIdx] !== undefined ? legModes[legIdx] : isFollowRoads;
+        legModes.splice(legIdx, 1, originalMode, originalMode);
         isDraggingLine = true;
     }
 
@@ -943,8 +1000,11 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
             if (Math.hypot(dx, dy) < SCULPT_MOVE_THRESHOLD_PX) return;
 
             e.preventDefault();
-            draggedPointIndex = touchStartPoint.segment + 1;
+            const legIdx = roadRouteIndexToLegIndex(touchStartPoint.segment);
+            draggedPointIndex = legIdx + 1;
             route.splice(draggedPointIndex, 0, touchStartPoint.point);
+            const originalMode = legModes[legIdx] !== undefined ? legModes[legIdx] : isFollowRoads;
+            legModes.splice(legIdx, 1, originalMode, originalMode);
             isDraggingLine = true;
         } else {
             e.preventDefault();
@@ -983,7 +1043,7 @@ document.getElementById("map").addEventListener("touchend", endTouchDrag, false)
 document.addEventListener("touchcancel", endTouchDrag, false);
 
 // Buttons
-document.getElementById("toggleFollowRoads").addEventListener("click", async function () {
+document.getElementById("toggleFollowRoads").addEventListener("click", function () {
     isFollowRoads = !isFollowRoads;
     this.textContent = `Follow Roads: ${isFollowRoads ? 'ON' : 'OFF'}`;
     this.classList.toggle("active");
@@ -992,9 +1052,10 @@ document.getElementById("toggleFollowRoads").addEventListener("click", async fun
     // would silently discard this manual change and revert to whatever
     // Follow Roads was BEFORE Freehand was turned on.
     if (isFreehandMode) followRoadsBeforeFreehand = isFollowRoads;
-    // Re-render the existing route in the new mode immediately, instead of
-    // only affecting points added after the toggle.
-    await rebuildRoute();
+    // Deliberately does NOT rebuild the existing route: mode is now a
+    // per-leg property recorded at creation time (see legModes above), so
+    // toggling this only affects legs added AFTER this point - it no
+    // longer silently re-snaps/re-straightens everything already drawn.
 });
 
 document.getElementById("toggleFreehandBtn").addEventListener("click", function () {
