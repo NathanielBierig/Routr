@@ -85,6 +85,19 @@ function updateMarkers() {
     });
 }
 
+function getDistanceInMiles(lat1, lon1, lat2, lon2) {
+    const R = 3959;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+let searchMarker = null;
+
 async function searchPlace(query) {
     try {
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}`;
@@ -96,9 +109,34 @@ async function searchPlace(query) {
             const coords = [feature.center[0], feature.center[1]];
             const placeName = feature.place_name || feature.text || query;
 
+            // Geofence: if route exists, only allow searches within 25 miles
+            if (route.length > 0) {
+                const startPoint = route[0];
+                const distMiles = getDistanceInMiles(startPoint[1], startPoint[0], coords[1], coords[0]);
+                if (distMiles > 25) {
+                    const searchInput = document.getElementById("searchInput");
+                    searchInput.placeholder = `Too far (${distMiles.toFixed(1)} mi > 25 mi)`;
+                    searchInput.value = "";
+                    return null;
+                }
+            }
+
             map.flyTo({ center: coords, zoom: 14 });
 
-            // Show confirmation of searched place
+            // Add golden search marker
+            if (searchMarker) searchMarker.remove();
+            const el = document.createElement('div');
+            el.style.width = '16px';
+            el.style.height = '16px';
+            el.style.backgroundColor = '#FFD700';
+            el.style.borderRadius = '50%';
+            el.style.border = '3px solid white';
+            el.style.boxShadow = '0 0 12px rgba(255, 215, 0, 0.8)';
+
+            searchMarker = new mapboxgl.Marker({ element: el })
+                .setLngLat(coords)
+                .addTo(map);
+
             const searchInput = document.getElementById("searchInput");
             searchInput.placeholder = `Located: ${placeName}`;
             searchInput.value = "";
