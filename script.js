@@ -453,64 +453,32 @@ function distance(p1, p2) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-// Click to add point or sculpt route
+// Single unified click handler - add points or start drag
 map.on("click", async function (event) {
-    if (!isDrawingMode || isDrawingFreehand) return;
-
-    const point = [event.lngLat.lng, event.lngLat.lat];
-
-    // Check if clicking near an existing route segment for sculpting
-    let nearestDist = 0.001; // ~100 meters in degrees
-    let nearestSegment = -1;
-
-    for (let i = 0; i < roadRoute.length - 1; i++) {
-        const closest = closestPointOnSegment(point, roadRoute[i], roadRoute[i + 1]);
-        const dist = distance(point, closest);
-        if (dist < nearestDist) {
-            nearestDist = dist;
-            nearestSegment = i;
-        }
-    }
-
-    if (nearestSegment !== -1) {
-        // Sculpting mode: insert a waypoint
-        draggedPointIndex = nearestSegment + 1;
-        isDraggingLine = true;
-        // Add point temporarily
-        route.splice(draggedPointIndex, 0, point);
-        await rebuildRoute();
-        updateMarkers();
-    } else {
-        // Normal mode: add new point
-        if (isFollowRoads) {
-            await addPoint(point);
-        } else {
-            roadRoute.push(point);
-            route.push(point);
-            if (map.getSource("route")) {
-                map.getSource("route").setData({
-                    type: "Feature",
-                    geometry: { type: "LineString", coordinates: roadRoute }
-                });
-            }
-            updateMarkers();
-            updateHUD();
-        }
-    }
-});
-
-// Mouse down to start freehand drawing or sculpting
-map.on("mousedown", async function (event) {
     if (!isDrawingMode) return;
 
     const point = [event.lngLat.lng, event.lngLat.lat];
+    await addPoint(point);
+});
+
+// Drag handling for sculpting
+let isMouseDown = false;
+let dragStartPoint = null;
+
+document.getElementById("map").addEventListener("mousedown", (e) => {
+    if (!isDrawingMode) return;
+    isMouseDown = true;
+    dragStartPoint = null;
+
+    const point = map.unproject([e.clientX - map.getContainer().getBoundingClientRect().left, e.clientY - map.getContainer().getBoundingClientRect().top]);
+    const mapPoint = [point.lng, point.lat];
 
     let nearestDist = 0.001;
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
-        const closest = closestPointOnSegment(point, roadRoute[i], roadRoute[i + 1]);
-        const dist = distance(point, closest);
+        const closest = closestPointOnSegment(mapPoint, roadRoute[i], roadRoute[i + 1]);
+        const dist = distance(mapPoint, closest);
         if (dist < nearestDist) {
             nearestDist = dist;
             nearestSegment = i;
@@ -518,55 +486,55 @@ map.on("mousedown", async function (event) {
     }
 
     if (nearestSegment !== -1) {
-        draggedPointIndex = nearestSegment + 1;
+        dragStartPoint = { segment: nearestSegment, point: mapPoint };
+    }
+});
+
+document.getElementById("map").addEventListener("mousemove", async (e) => {
+    if (!isMouseDown || !dragStartPoint) return;
+
+    const point = map.unproject([e.clientX - map.getContainer().getBoundingClientRect().left, e.clientY - map.getContainer().getBoundingClientRect().top]);
+    const mapPoint = [point.lng, point.lat];
+
+    if (draggedPointIndex === -1) {
+        draggedPointIndex = dragStartPoint.segment + 1;
+        route.splice(draggedPointIndex, 0, dragStartPoint.point);
         isDraggingLine = true;
-        route.splice(draggedPointIndex, 0, point);
-        await rebuildRoute();
-        updateMarkers();
-    } else {
-        isDrawingFreehand = true;
-        freehandPath = [[event.lngLat.lng, event.lngLat.lat]];
     }
+
+    route[draggedPointIndex] = mapPoint;
+    await rebuildRoute();
+    updateMarkers();
 });
 
-// Mouse move for freehand drawing or sculpting
-map.on("mousemove", async function (event) {
-    if (isDrawingFreehand) {
-        drawFreehandLine([event.lngLat.lng, event.lngLat.lat]);
-    }
-    if (isDraggingLine && draggedPointIndex !== -1) {
-        route[draggedPointIndex] = [event.lngLat.lng, event.lngLat.lat];
-        await rebuildRoute();
-        updateMarkers();
-    }
-});
-
-// Mouse up to finish freehand drawing or sculpting
-map.on("mouseup", function () {
-    if (isDrawingFreehand) {
-        isDrawingFreehand = false;
-        finalizeFreehandPath();
-    }
+document.getElementById("map").addEventListener("mouseup", async () => {
+    isMouseDown = false;
     if (isDraggingLine) {
         isDraggingLine = false;
         draggedPointIndex = -1;
     }
+    dragStartPoint = null;
 });
 
 // Touch support for mobile drawing
-document.getElementById("map").addEventListener("touchstart", function (event) {
+let isTouchDown = false;
+let touchStartPoint = null;
+
+document.getElementById("map").addEventListener("touchstart", (e) => {
     if (!isDrawingMode) return;
-    event.preventDefault();
-    const touch = event.touches[0];
+    isTouchDown = true;
+
+    const touch = e.touches[0];
     const bounds = map.getContainer().getBoundingClientRect();
     const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+    const mapPoint = [point.lng, point.lat];
 
     let nearestDist = 0.001;
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
-        const closest = closestPointOnSegment(point, roadRoute[i], roadRoute[i + 1]);
-        const dist = distance(point, closest);
+        const closest = closestPointOnSegment(mapPoint, roadRoute[i], roadRoute[i + 1]);
+        const dist = distance(mapPoint, closest);
         if (dist < nearestDist) {
             nearestDist = dist;
             nearestSegment = i;
@@ -574,42 +542,40 @@ document.getElementById("map").addEventListener("touchstart", function (event) {
     }
 
     if (nearestSegment !== -1) {
-        isDraggingLine = true;
-        draggedPointIndex = nearestSegment + 1;
-        route.splice(draggedPointIndex, 0, [point.lng, point.lat]);
-    } else {
-        isDrawingFreehand = true;
-        freehandPath = [[point.lng, point.lat]];
+        e.preventDefault();
+        touchStartPoint = { segment: nearestSegment, point: mapPoint };
     }
 }, false);
 
-document.getElementById("map").addEventListener("touchmove", function (event) {
-    if (!isDrawingFreehand && !isDraggingLine) return;
-    event.preventDefault();
+document.getElementById("map").addEventListener("touchmove", async (e) => {
+    if (!isTouchDown) return;
 
-    const touch = event.touches[0];
-    const bounds = map.getContainer().getBoundingClientRect();
-    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+    if (touchStartPoint) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const bounds = map.getContainer().getBoundingClientRect();
+        const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+        const mapPoint = [point.lng, point.lat];
 
-    if (isDrawingFreehand) {
-        drawFreehandLine([point.lng, point.lat]);
-    }
-    if (isDraggingLine && draggedPointIndex !== -1) {
-        route[draggedPointIndex] = [point.lng, point.lat];
-    }
-}, false);
+        if (draggedPointIndex === -1) {
+            draggedPointIndex = touchStartPoint.segment + 1;
+            route.splice(draggedPointIndex, 0, touchStartPoint.point);
+            isDraggingLine = true;
+        }
 
-document.getElementById("map").addEventListener("touchend", async function (event) {
-    if (isDrawingFreehand) {
-        isDrawingFreehand = false;
-        finalizeFreehandPath();
-    }
-    if (isDraggingLine) {
-        isDraggingLine = false;
+        route[draggedPointIndex] = mapPoint;
         await rebuildRoute();
         updateMarkers();
+    }
+}, false);
+
+document.getElementById("map").addEventListener("touchend", async (e) => {
+    isTouchDown = false;
+    if (isDraggingLine) {
+        isDraggingLine = false;
         draggedPointIndex = -1;
     }
+    touchStartPoint = null;
 }, false);
 
 // Buttons
