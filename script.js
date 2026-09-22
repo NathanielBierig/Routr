@@ -138,7 +138,14 @@ let searchMarker = null;
 
 async function searchPlace(query) {
     try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}`;
+        // Bias results toward wherever the user is actually looking (route
+        // start if one exists, otherwise the current map center) - without
+        // this, Mapbox's geocoder ranks purely on text match and can return
+        // a same-named place on the other side of the country/world ahead
+        // of the one 2 blocks away.
+        const anchor = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
+            `?proximity=${anchor[0]},${anchor[1]}&access_token=${mapboxgl.accessToken}`;
         const response = await fetch(url);
         const data = await response.json();
 
@@ -502,11 +509,18 @@ function closeLoop() {
 
 async function getAddressFromCoords(lng, lat) {
     try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxgl.accessToken}`;
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
+            `?types=address,poi&access_token=${mapboxgl.accessToken}`;
         const response = await fetch(url);
         const data = await response.json();
         if (data.features && data.features.length > 0) {
-            return data.features[0].place_name || `Point ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+            const feature = data.features[0];
+            // Short label only: street/POI name (+ house number if present)
+            // plus city - place_name includes zip/state/country too, which
+            // is unreadable clutter in a compact waypoint list.
+            const streetName = feature.address ? `${feature.address} ${feature.text}` : feature.text;
+            const city = (feature.context || []).find(c => c.id.startsWith('place'));
+            return city ? `${streetName}, ${city.text}` : (streetName || `Point ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
         }
     } catch (err) {
         console.error("Reverse geocoding failed:", err);
@@ -619,6 +633,15 @@ function toggleReorderPanel() {
 }
 
 map.on("load", function () {
+    // Mapbox Standard style auto-switches to a 3D globe with atmospheric
+    // fog below ~zoom 5, and the "night" light preset applies a scene-wide
+    // dark/blue atmospheric tint even in mercator view - both desaturate
+    // every layer on the map, including our neon route lines, the further
+    // out you zoom. Forcing flat mercator projection and disabling fog
+    // keeps route colors at full, undimmed brightness regardless of zoom.
+    map.setProjection('mercator');
+    map.setFog(null);
+
     // Main route source
     map.addSource("route", {
         type: "geojson",
@@ -681,6 +704,13 @@ let isMouseDown = false;
 let dragStartPoint = null;
 
 document.getElementById("map").addEventListener("mousedown", (e) => {
+    // Marker elements are DOM children of #map's container, so a mousedown
+    // on a marker bubbles up into this listener too - Mapbox's own marker
+    // drag logic AND this sculpt-drag logic would both start simultaneously,
+    // each fighting over the route array and corrupting it. Let marker drags
+    // (see updateMarkers()) handle themselves exclusively.
+    if (e.target.closest('.mapboxgl-marker')) return;
+
     isMouseDown = true;
     dragStartPoint = null;
 
@@ -766,6 +796,10 @@ let isTouchDown = false;
 let touchStartPoint = null;
 
 document.getElementById("map").addEventListener("touchstart", (e) => {
+    // Same conflict as the mousedown guard above - a marker's own touch
+    // drag must not also trigger our sculpt-drag capture.
+    if (e.target.closest('.mapboxgl-marker')) return;
+
     isTouchDown = true;
 
     const touch = e.touches[0];
