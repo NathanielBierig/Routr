@@ -538,28 +538,61 @@ map.on("mouseup", function () {
 // Touch support for mobile drawing
 document.getElementById("map").addEventListener("touchstart", function (event) {
     if (!isDrawingMode) return;
-    const touch = event.touches[0];
-    const bounds = map.getContainer().getBoundingClientRect();
-    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
-    isDrawingFreehand = true;
-    freehandPath = [[point.lng, point.lat]];
-});
-
-document.getElementById("map").addEventListener("touchmove", function (event) {
-    if (!isDrawingFreehand) return;
     event.preventDefault();
     const touch = event.touches[0];
     const bounds = map.getContainer().getBoundingClientRect();
     const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
-    drawFreehandLine([point.lng, point.lat]);
-});
 
-document.getElementById("map").addEventListener("touchend", function (event) {
+    let nearestDist = 0.001;
+    let nearestSegment = -1;
+
+    for (let i = 0; i < roadRoute.length - 1; i++) {
+        const closest = closestPointOnSegment(point, roadRoute[i], roadRoute[i + 1]);
+        const dist = distance(point, closest);
+        if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestSegment = i;
+        }
+    }
+
+    if (nearestSegment !== -1) {
+        isDraggingLine = true;
+        draggedPointIndex = nearestSegment + 1;
+        route.splice(draggedPointIndex, 0, [point.lng, point.lat]);
+    } else {
+        isDrawingFreehand = true;
+        freehandPath = [[point.lng, point.lat]];
+    }
+}, false);
+
+document.getElementById("map").addEventListener("touchmove", function (event) {
+    if (!isDrawingFreehand && !isDraggingLine) return;
+    event.preventDefault();
+
+    const touch = event.touches[0];
+    const bounds = map.getContainer().getBoundingClientRect();
+    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+
+    if (isDrawingFreehand) {
+        drawFreehandLine([point.lng, point.lat]);
+    }
+    if (isDraggingLine && draggedPointIndex !== -1) {
+        route[draggedPointIndex] = [point.lng, point.lat];
+    }
+}, false);
+
+document.getElementById("map").addEventListener("touchend", async function (event) {
     if (isDrawingFreehand) {
         isDrawingFreehand = false;
         finalizeFreehandPath();
     }
-});
+    if (isDraggingLine) {
+        isDraggingLine = false;
+        await rebuildRoute();
+        updateMarkers();
+        draggedPointIndex = -1;
+    }
+}, false);
 
 // Buttons
 document.getElementById("toggleDrawMode").addEventListener("click", function () {
