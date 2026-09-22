@@ -5,6 +5,11 @@ mapboxgl.accessToken = MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
     container: "map",
     style: "mapbox://styles/mapbox/standard",
+    config: {
+        basemap: {
+            lightPreset: "night"
+        }
+    },
     center: [-74.01, 40.89],
     zoom: 13
 });
@@ -154,10 +159,9 @@ function updateLayers() {
                 type: "line",
                 source: sourceId,
                 paint: {
-                    "line-width": 5,
+                    "line-width": 8,
                     "line-color": legColors[idx % legColors.length],
-                    "line-opacity": 0.8,
-                    "line-dasharray": [2, 2]
+                    "line-opacity": 1
                 }
             });
         } else {
@@ -187,9 +191,9 @@ function drawFreehandLine(point) {
             type: "line",
             source: "freehand",
             paint: {
-                "line-width": 3,
+                "line-width": 6,
                 "line-color": "#00FFFF",
-                "line-dasharray": [4, 4]
+                "line-opacity": 0.9
             }
         });
     } else {
@@ -321,9 +325,9 @@ map.on("load", function () {
         type: "line",
         source: "route",
         paint: {
-            "line-width": 5,
+            "line-width": 8,
             "line-color": "#FFFFFF",
-            "line-opacity": 0.3
+            "line-opacity": 0.2
         }
     });
 
@@ -341,9 +345,9 @@ map.on("load", function () {
         type: "line",
         source: "freehand",
         paint: {
-            "line-width": 3,
+            "line-width": 6,
             "line-color": "#00FFFF",
-            "line-dasharray": [4, 4]
+            "line-opacity": 0.9
         }
     });
 });
@@ -367,7 +371,7 @@ function distance(p1, p2) {
 
 // Click to add point or sculpt route
 map.on("click", async function (event) {
-    if (!isDrawingMode) return;
+    if (!isDrawingMode || isDrawingFreehand) return;
 
     const point = [event.lngLat.lng, event.lngLat.lat];
 
@@ -439,6 +443,32 @@ map.on("mouseup", function () {
     if (isDraggingLine) {
         isDraggingLine = false;
         draggedPointIndex = -1;
+    }
+});
+
+// Touch support for mobile drawing
+document.getElementById("map").addEventListener("touchstart", function (event) {
+    if (!isDrawingMode) return;
+    const touch = event.touches[0];
+    const bounds = map.getContainer().getBoundingClientRect();
+    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+    isDrawingFreehand = true;
+    freehandPath = [[point.lng, point.lat]];
+});
+
+document.getElementById("map").addEventListener("touchmove", function (event) {
+    if (!isDrawingFreehand) return;
+    event.preventDefault();
+    const touch = event.touches[0];
+    const bounds = map.getContainer().getBoundingClientRect();
+    const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
+    drawFreehandLine([point.lng, point.lat]);
+});
+
+document.getElementById("map").addEventListener("touchend", function (event) {
+    if (isDrawingFreehand) {
+        isDrawingFreehand = false;
+        finalizeFreehandPath();
     }
 });
 
