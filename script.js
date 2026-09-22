@@ -61,6 +61,9 @@ function getPaceInput() {
     return parseFloat(document.getElementById("paceInput").value) || 5;
 }
 
+let useMiles = false;
+const KM_PER_MILE = 1.60934;
+
 function debounce(fn, delay) {
     let timeout;
     return function(...args) {
@@ -101,15 +104,23 @@ function hideLoading() {
 
 function updateHUD() {
     const distanceKm = totalDistance / 1000;
+    const distanceInUnit = useMiles ? distanceKm / KM_PER_MILE : distanceKm;
+    const unitLabel = useMiles ? "mi" : "km";
     const walkingMinutes = totalDuration / 60;
     const pace = getPaceInput();
-    const runningMinutes = (distanceKm / pace) * 60;
+    // Running time = distance x pace (pace is minutes PER UNIT, e.g. "5
+    // min/km" means each km takes 5 minutes - so 5.9km at 5 min/km is
+    // 5.9 x 5 = 29.5 minutes). This was previously (distance / pace) * 60,
+    // which is not a meaningful formula for this at all - it inflated
+    // running time by roughly a factor of 12 at a 5 min/km pace (a 5.9km
+    // route reported 71 minutes instead of the correct ~29.5).
+    const runningMinutes = distanceInUnit * pace;
 
-    document.getElementById("distance").textContent = `Distance: ${distanceKm.toFixed(2)} km`;
+    document.getElementById("distance").textContent = `Distance: ${distanceInUnit.toFixed(2)} ${unitLabel}`;
     document.getElementById("walkingTime").textContent = `Walking: ${Math.round(walkingMinutes)} min`;
     document.getElementById("runningTime").textContent = `Running: ${Math.round(runningMinutes)} min`;
-    document.getElementById("pace").textContent = `Pace: ${pace.toFixed(1)} min/km`;
-    document.getElementById("hudSummary").textContent = `Distance: ${distanceKm.toFixed(2)} km`;
+    document.getElementById("pace").textContent = `Pace: ${pace.toFixed(1)} min/${unitLabel}`;
+    document.getElementById("hudSummary").textContent = `Distance: ${distanceInUnit.toFixed(2)} ${unitLabel}`;
 }
 
 function updateMarkers() {
@@ -1082,6 +1093,23 @@ document.getElementById("map").addEventListener("touchend", endTouchDrag, false)
 document.addEventListener("touchcancel", endTouchDrag, false);
 
 // Buttons
+document.getElementById("toggleUnitsBtn").addEventListener("click", function () {
+    const pace = getPaceInput();
+    // Convert the pace VALUE so it still represents the same real-world
+    // speed in the new unit, rather than just relabeling a stale number
+    // (e.g. "5 min/km" becoming "5 min/mi" would silently be a much
+    // faster pace, not the same pace).
+    const newPace = useMiles ? pace / KM_PER_MILE : pace * KM_PER_MILE;
+    useMiles = !useMiles;
+    document.getElementById("paceInput").value = newPace.toFixed(1);
+
+    const unitLabel = useMiles ? "mi" : "km";
+    this.textContent = `Units: ${unitLabel}`;
+    document.getElementById("paceLabel").textContent = `Running Pace (min/${unitLabel}):`;
+
+    updateHUD();
+});
+
 document.getElementById("toggleFollowRoads").addEventListener("click", function () {
     isFollowRoads = !isFollowRoads;
     this.textContent = `Follow Roads: ${isFollowRoads ? 'ON' : 'OFF'}`;
@@ -1114,6 +1142,40 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
     }
 });
 
+document.getElementById("moreMenuBtn").addEventListener("click", function () {
+    document.getElementById("moreMenu").classList.toggle("hidden");
+});
+
+// Explicit, opt-in action - unlike the on-load map centering (which only
+// pans the camera), this actually adds the user's current GPS position as
+// a real route waypoint, exactly like clicking that spot on the map. A
+// runner often wants to plan a route starting somewhere else entirely
+// (scouting a route for later, planning from a friend's place, etc.), so
+// this is never automatic. Being a normal route point, Clear removes it
+// like any other waypoint - no special-casing needed.
+document.getElementById("addCurrentLocationBtn").addEventListener("click", function () {
+    if (!navigator.geolocation) {
+        alert("Geolocation isn't available in this browser.");
+        return;
+    }
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = "📍 Locating...";
+    navigator.geolocation.getCurrentPosition(
+        async (position) => {
+            await addPoint([position.coords.longitude, position.coords.latitude]);
+            btn.disabled = false;
+            btn.textContent = "📍 Add Current Location";
+        },
+        () => {
+            alert("Couldn't get your location - check location permissions for this site.");
+            btn.disabled = false;
+            btn.textContent = "📍 Add Current Location";
+        },
+        { timeout: 10000 }
+    );
+});
+
 document.getElementById("reorderBtn").addEventListener("click", toggleReorderPanel);
 
 document.getElementById("closeReorderBtn").addEventListener("click", toggleReorderPanel);
@@ -1124,7 +1186,10 @@ document.getElementById("clearBtn").addEventListener("click", clear);
 
 document.getElementById("closeLoopBtn").addEventListener("click", closeLoop);
 
-document.getElementById("paceInput").addEventListener("change", debounce(updateHUD, 100));
+// "input" fires on every keystroke (live typing), unlike "change" which
+// only fired on blur/Enter - typing a new pace now updates Running time as
+// you type, not just after you click away from the field.
+document.getElementById("paceInput").addEventListener("input", debounce(updateHUD, 100));
 
 async function triggerSearch(input) {
     if (!input.value.trim()) return;
