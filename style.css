@@ -37,11 +37,42 @@ body {
     #hud {
         top: 10px;
         left: 10px;
-        right: auto;
-        max-width: 280px;
+        right: 10px;
+        max-width: none;
         padding: 12px;
         font-size: 11px;
+        max-height: 44px;
+        overflow: hidden;
+        transition: max-height 0.3s ease;
     }
+
+    #hud.expanded {
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+
+    #hudToggle {
+        display: flex;
+    }
+}
+
+#hudToggle {
+    display: none;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: #00ff88;
+    margin-bottom: 8px;
+}
+
+#hudToggle span.chevron {
+    transition: transform 0.3s ease;
+}
+
+#hud.expanded #hudToggle span.chevron {
+    transform: rotate(180deg);
 }
 
 #stats {
@@ -309,4 +340,19 @@ body {
     0% { opacity: 1; }
     70% { opacity: 1; }
     100% { opacity: 0; pointer-events: none; }
+}
+
+.snap-ring {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 3px solid #00ff88;
+    background: transparent;
+    pointer-events: none;
+    animation: snapPulse 0.9s ease-out forwards;
+}
+
+@keyframes snapPulse {
+    0% { transform: scale(0.4); opacity: 1; }
+    100% { transform: scale(2.2); opacity: 0; }
 }

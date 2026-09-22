@@ -69,6 +69,7 @@ function updateHUD() {
     document.getElementById("walkingTime").textContent = `Walking: ${Math.round(walkingMinutes)} min`;
     document.getElementById("runningTime").textContent = `Running: ${Math.round(runningMinutes)} min`;
     document.getElementById("pace").textContent = `Pace: ${pace.toFixed(1)} min/km`;
+    document.getElementById("hudSummary").textContent = `Distance: ${distanceKm.toFixed(2)} km`;
 }
 
 function updateMarkers() {
@@ -332,11 +333,37 @@ function finalizeFreehandPath() {
     updateMarkers();
 }
 
+function showSnapIndicator(clickedPoint) {
+    if (roadRoute.length === 0) return;
+
+    let nearestDist = Infinity;
+    let nearestPoint = null;
+    roadRoute.forEach(p => {
+        const d = distance(clickedPoint, p);
+        if (d < nearestDist) {
+            nearestDist = d;
+            nearestPoint = p;
+        }
+    });
+
+    // Only show snap indicator if the snap moved the point meaningfully (~15m+)
+    if (!nearestPoint || nearestDist < 0.00012) return;
+
+    const el = document.createElement('div');
+    el.className = 'snap-ring';
+    const ringMarker = new mapboxgl.Marker({ element: el })
+        .setLngLat(nearestPoint)
+        .addTo(map);
+
+    setTimeout(() => ringMarker.remove(), 900);
+}
+
 async function addPoint(point) {
     route.push(point);
 
     if (isFollowRoads && route.length >= 2) {
         await rebuildRoute();
+        showSnapIndicator(point);
     } else if (!isFollowRoads) {
         // Free draw mode - just add straight lines
         roadRoute.push(point);
@@ -693,8 +720,18 @@ document.getElementById("searchInput").addEventListener("keypress", async functi
     }
 });
 
+document.getElementById("hudToggle").addEventListener("click", function () {
+    document.getElementById("hud").classList.toggle("expanded");
+});
+
 // Set initial active state for buttons
 document.getElementById("toggleDrawMode").classList.add("active");
 document.getElementById("toggleFollowRoads").classList.add("active");
+
+// Hide help overlay after first click
+map.once("click", () => {
+    const overlay = document.getElementById("helpOverlay");
+    if (overlay) overlay.remove();
+});
 
 updateHUD();
