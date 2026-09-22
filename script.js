@@ -763,6 +763,23 @@ function toggleReorderPanel() {
     }
 }
 
+// Center on the user's actual location instead of the hardcoded fallback
+// coordinates, if they grant permission. Falls back silently to whatever
+// `center` the map was constructed with (denied/unsupported/timed out) -
+// never blocks map load waiting on this.
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            map.jumpTo({
+                center: [position.coords.longitude, position.coords.latitude],
+                zoom: 14
+            });
+        },
+        () => { /* denied or unavailable - keep the fallback center */ },
+        { timeout: 5000 }
+    );
+}
+
 map.on("load", function () {
     // Mapbox Standard style auto-switches to a 3D globe with atmospheric
     // fog below ~zoom 5, and the "night" light preset applies a scene-wide
