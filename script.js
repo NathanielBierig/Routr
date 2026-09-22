@@ -561,6 +561,17 @@ function distance(p1, p2) {
     return Math.sqrt(dx * dx + dy * dy);
 }
 
+// Hit-test radius in degrees, calibrated to a fixed screen-pixel radius
+// regardless of zoom level (was hardcoded to 0.001 ≈ 111m, way too large -
+// it was swallowing normal "add point" taps near any existing route line).
+function getHitRadiusDegrees(pixelRadius = 18) {
+    const zoom = map.getZoom();
+    const lat = map.getCenter().lat;
+    const metersPerPixel = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+    const meters = pixelRadius * metersPerPixel;
+    return meters / 111320;
+}
+
 // Single unified click handler - add points
 map.on("click", async function (event) {
     if (!isDrawingMode) return;
@@ -581,7 +592,7 @@ document.getElementById("map").addEventListener("mousedown", (e) => {
     const point = map.unproject([e.clientX - map.getContainer().getBoundingClientRect().left, e.clientY - map.getContainer().getBoundingClientRect().top]);
     const mapPoint = [point.lng, point.lat];
 
-    let nearestDist = 0.001;
+    let nearestDist = getHitRadiusDegrees(18);
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
@@ -637,7 +648,7 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
     const point = map.unproject([touch.clientX - bounds.left, touch.clientY - bounds.top]);
     const mapPoint = [point.lng, point.lat];
 
-    let nearestDist = 0.001;
+    let nearestDist = getHitRadiusDegrees(28);
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
