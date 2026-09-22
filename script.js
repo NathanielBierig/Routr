@@ -75,6 +75,20 @@ function updateMarkers() {
     });
 }
 
+async function searchPlace(query) {
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxgl.accessToken}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.features && data.features.length > 0) {
+        const feature = data.features[0];
+        const coords = [feature.center[0], feature.center[1]];
+        map.flyTo({ center: coords, zoom: 14 });
+        return coords;
+    }
+    return null;
+}
+
 async function getRoadRoute(startIdx, endIdx) {
     if (startIdx >= route.length || endIdx >= route.length) return null;
 
@@ -310,6 +324,58 @@ function closeLoop() {
     }
 }
 
+function updateReorderList() {
+    const list = document.getElementById("reorderList");
+    list.innerHTML = "";
+
+    route.forEach((point, idx) => {
+        const item = document.createElement("div");
+        item.className = "waypoint-item";
+        item.draggable = true;
+        item.dataset.index = idx;
+        item.textContent = `${idx + 1}. [${point[0].toFixed(4)}, ${point[1].toFixed(4)}]`;
+
+        item.addEventListener("dragstart", (e) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", idx);
+            item.classList.add("dragging");
+        });
+
+        item.addEventListener("dragend", () => {
+            item.classList.remove("dragging");
+        });
+
+        item.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+        });
+
+        item.addEventListener("drop", async (e) => {
+            e.preventDefault();
+            const fromIdx = parseInt(e.dataTransfer.getData("text/plain"));
+            const toIdx = idx;
+
+            if (fromIdx !== toIdx) {
+                const [movedPoint] = route.splice(fromIdx, 1);
+                route.splice(toIdx, 0, movedPoint);
+                await rebuildRoute();
+                updateMarkers();
+                updateReorderList();
+            }
+        });
+
+        list.appendChild(item);
+    });
+}
+
+function toggleReorderPanel() {
+    const panel = document.getElementById("reorderPanel");
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")) {
+        updateReorderList();
+    }
+}
+
 map.on("load", function () {
     // Main route source
     map.addSource("route", {
@@ -327,7 +393,7 @@ map.on("load", function () {
         paint: {
             "line-width": 8,
             "line-color": "#FFFFFF",
-            "line-opacity": 0.2
+            "line-opacity": 0
         }
     });
 
@@ -415,11 +481,34 @@ map.on("click", async function (event) {
     }
 });
 
-// Mouse down to start freehand drawing
-map.on("mousedown", function (event) {
+// Mouse down to start freehand drawing or sculpting
+map.on("mousedown", async function (event) {
     if (!isDrawingMode) return;
-    isDrawingFreehand = true;
-    freehandPath = [[event.lngLat.lng, event.lngLat.lat]];
+
+    const point = [event.lngLat.lng, event.lngLat.lat];
+
+    let nearestDist = 0.001;
+    let nearestSegment = -1;
+
+    for (let i = 0; i < roadRoute.length - 1; i++) {
+        const closest = closestPointOnSegment(point, roadRoute[i], roadRoute[i + 1]);
+        const dist = distance(point, closest);
+        if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestSegment = i;
+        }
+    }
+
+    if (nearestSegment !== -1) {
+        draggedPointIndex = nearestSegment + 1;
+        isDraggingLine = true;
+        route.splice(draggedPointIndex, 0, point);
+        await rebuildRoute();
+        updateMarkers();
+    } else {
+        isDrawingFreehand = true;
+        freehandPath = [[event.lngLat.lng, event.lngLat.lat]];
+    }
 });
 
 // Mouse move for freehand drawing or sculpting
@@ -485,6 +574,10 @@ document.getElementById("toggleFollowRoads").addEventListener("click", function 
     this.classList.toggle("active");
 });
 
+document.getElementById("reorderBtn").addEventListener("click", toggleReorderPanel);
+
+document.getElementById("closeReorderBtn").addEventListener("click", toggleReorderPanel);
+
 document.getElementById("undoBtn").addEventListener("click", undo);
 
 document.getElementById("clearBtn").addEventListener("click", clear);
@@ -492,6 +585,15 @@ document.getElementById("clearBtn").addEventListener("click", clear);
 document.getElementById("closeLoopBtn").addEventListener("click", closeLoop);
 
 document.getElementById("paceInput").addEventListener("change", updateHUD);
+
+document.getElementById("searchInput").addEventListener("keypress", async function (e) {
+    if (e.key === "Enter" && this.value.trim()) {
+        const coords = await searchPlace(this.value);
+        if (coords) {
+            this.value = "";
+        }
+    }
+});
 
 // Set initial active state for buttons
 document.getElementById("toggleDrawMode").classList.add("active");
