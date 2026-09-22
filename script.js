@@ -32,7 +32,11 @@ let isFreehandMode = false;
 let isCapturingFreehand = false;
 let freehandCapturePath = [];
 let followRoadsBeforeFreehand = true;
-const MIN_FREEHAND_POINT_METERS = 4;
+// 4m produced a captured point (and therefore a route waypoint + marker)
+// roughly every step, so a single loop around a park turned into hundreds
+// of vertices/markers - way too dense to be readable. 20m still traces a
+// recognizable path shape while cutting vertex count by ~5x.
+const MIN_FREEHAND_POINT_METERS = 20;
 
 // Neon colors for legs (cycle through)
 const legColors = [
@@ -52,11 +56,23 @@ function debounce(fn, delay) {
     };
 }
 
+// showLoading only dimmed #map - nothing stopped a user from stacking
+// Undo/Clear/Follow-Roads-toggle clicks (all HUD buttons, outside #map)
+// during an in-flight Directions API call, which is exactly what could
+// trigger the rebuildRoute() race the generation-token guard now recovers
+// from. Disabling these buttons too prevents the race from being triggered
+// in the first place, rather than just surviving it.
+const ACTION_BUTTON_IDS = ['toggleFollowRoads', 'undoBtn', 'clearBtn', 'closeLoopBtn'];
+
 function showLoading() {
     isLoading = true;
     const map_el = document.getElementById("map");
     map_el.style.opacity = "0.7";
     map_el.style.pointerEvents = "none";
+    ACTION_BUTTON_IDS.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = true;
+    });
 }
 
 function hideLoading() {
@@ -64,6 +80,10 @@ function hideLoading() {
     const map_el = document.getElementById("map");
     map_el.style.opacity = "1";
     map_el.style.pointerEvents = "auto";
+    ACTION_BUTTON_IDS.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = false;
+    });
 }
 
 function updateHUD() {
@@ -302,19 +322,43 @@ async function getRoadRoute(startIdx, endIdx) {
     }
 }
 
+// Generation token: every rebuildRoute() call stamps its own call with the
+// current value, incremented up front. Since rebuildRoute() is async and
+// can overlap with another call triggered mid-flight (double Undo, a click
+// landing while a drag's rebuild is still awaiting the Directions API,
+// rapid Follow Roads toggling, etc.), a stale call finishing after a newer
+// one must NOT write its results into the shared legs/roadRoute/totals -
+// that was a real race condition where two overlapping rebuilds fought over
+// the same globals and whichever resolved last silently won, regardless of
+// which one was actually still relevant.
+let rebuildGeneration = 0;
+
 async function rebuildRoute() {
-    legs.length = 0;
-    roadRoute = [];
-    totalDistance = 0;
-    totalDuration = 0;
+    const myGeneration = ++rebuildGeneration;
 
     if (route.length < 2) {
+        legs.length = 0;
+        roadRoute = [];
+        totalDistance = 0;
+        totalDuration = 0;
         updateLayers();
         updateHUD();
         return;
     }
 
-    if (isFollowRoads) showLoading();
+    // Captured once, not re-read later: isFollowRoads can change (another
+    // toggle click) while this call is still awaiting API responses. The
+    // old code gated hideLoading() on the CURRENT isFollowRoads instead of
+    // the value that was true when showLoading() actually ran - if a toggle
+    // flipped it to false in between, hideLoading() would never fire and
+    // #map would stay dimmed/disabled permanently.
+    const wasFollowRoads = isFollowRoads;
+    if (wasFollowRoads) showLoading();
+
+    const newLegs = [];
+    let newRoadRoute = [];
+    let newTotalDistance = 0;
+    let newTotalDuration = 0;
 
     // Get each leg - road-snapped (API) when Follow Roads is on, straight
     // line (instant, no API) when it's off. This is the single place that
@@ -324,18 +368,42 @@ async function rebuildRoute() {
         const legData = isFollowRoads
             ? await getRoadRoute(i, i + 1)
             : straightLineLeg(route[i], route[i + 1]);
+
+        // A newer rebuildRoute() call started while we were awaiting the
+        // API - abandon this one without touching shared state further.
+        // hideLoading() is idempotent/safe to call even if nothing is
+        // currently shown, so it's fine if the newer call's own showLoading/
+        // hideLoading also runs independently - the important thing is this
+        // call always clears whatever IT turned on.
+        if (myGeneration !== rebuildGeneration) {
+            if (wasFollowRoads) hideLoading();
+            return;
+        }
+
         if (legData) {
             const coords = i === 0 ? legData.coordinates : legData.coordinates.slice(1);
-            legs.push({
+            newLegs.push({
                 coordinates: legData.coordinates,
                 distance: legData.distance,
-                duration: legData.duration
+                duration: legData.duration,
+                isFallback: !!legData.isFallback
             });
-            roadRoute.push(...coords);
-            totalDistance += legData.distance;
-            totalDuration += legData.duration;
+            newRoadRoute.push(...coords);
+            newTotalDistance += legData.distance;
+            newTotalDuration += legData.duration;
         }
     }
+
+    if (myGeneration !== rebuildGeneration) {
+        if (wasFollowRoads) hideLoading();
+        return;
+    }
+
+    legs.length = 0;
+    legs.push(...newLegs);
+    roadRoute = newRoadRoute;
+    totalDistance = newTotalDistance;
+    totalDuration = newTotalDuration;
 
     updateLayers();
     updateHUD();
@@ -384,6 +452,10 @@ function updateLayers() {
                     "line-blur": 3
                 }
             });
+            // Fallback legs (unmapped park/trail interiors with no real
+            // walking route found - see straightLineLeg()) get a dashed
+            // core so they read as an unverified straight-line guess,
+            // distinct from a real road/path-snapped leg.
             map.addLayer({
                 id: coreLayerId,
                 type: "line",
@@ -391,7 +463,8 @@ function updateLayers() {
                 paint: {
                     "line-width": 5,
                     "line-color": color,
-                    "line-opacity": 1
+                    "line-opacity": 1,
+                    "line-dasharray": leg.isFallback ? [2, 2] : [1, 0]
                 }
             });
         } else {
@@ -399,6 +472,10 @@ function updateLayers() {
                 type: "Feature",
                 geometry: { type: "LineString", coordinates: leg.coordinates }
             });
+            // A leg's fallback status can change between rebuilds (e.g. a
+            // dragged waypoint now lands on a real mapped path) - keep the
+            // dash style in sync on updates too, not just first creation.
+            map.setPaintProperty(coreLayerId, "line-dasharray", leg.isFallback ? [2, 2] : [1, 0]);
         }
     });
 
@@ -794,6 +871,8 @@ window.addEventListener("blur", endMouseDrag);
 // Touch support for mobile drawing
 let isTouchDown = false;
 let touchStartPoint = null;
+let touchStartClientPos = null;
+const SCULPT_MOVE_THRESHOLD_PX = 10;
 
 document.getElementById("map").addEventListener("touchstart", (e) => {
     // Same conflict as the mousedown guard above - a marker's own touch
@@ -826,9 +905,18 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
         }
     }
 
+    // Deliberately do NOT preventDefault or commit to sculpt mode here. A
+    // stationary tap must still produce the browser's synthetic click event
+    // so it falls through to map.on("click") -> addPoint() normally.
+    // preventDefault() on touchstart suppresses that synthetic click
+    // entirely, which was silently swallowing any tap landing within the
+    // hit radius of an already-drawn route line - exactly the taps most
+    // likely during a multi-point loop. We only commit to sculpting once
+    // touchmove shows the finger actually moved (see SCULPT_MOVE_THRESHOLD_PX
+    // below).
     if (nearestSegment !== -1) {
-        e.preventDefault();
         touchStartPoint = { segment: nearestSegment, point: mapPoint };
+        touchStartClientPos = { x: touch.clientX, y: touch.clientY };
     }
 }, false);
 
@@ -849,12 +937,17 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
     }
 
     if (touchStartPoint) {
-        e.preventDefault();
-
         if (draggedPointIndex === -1) {
+            const dx = touch.clientX - touchStartClientPos.x;
+            const dy = touch.clientY - touchStartClientPos.y;
+            if (Math.hypot(dx, dy) < SCULPT_MOVE_THRESHOLD_PX) return;
+
+            e.preventDefault();
             draggedPointIndex = touchStartPoint.segment + 1;
             route.splice(draggedPointIndex, 0, touchStartPoint.point);
             isDraggingLine = true;
+        } else {
+            e.preventDefault();
         }
 
         route[draggedPointIndex] = mapPoint;
@@ -877,6 +970,7 @@ function endTouchDrag() {
         draggedPointIndex = -1;
     }
     touchStartPoint = null;
+    touchStartClientPos = null;
 }
 
 document.getElementById("map").addEventListener("touchend", endTouchDrag, false);
@@ -893,6 +987,11 @@ document.getElementById("toggleFollowRoads").addEventListener("click", async fun
     isFollowRoads = !isFollowRoads;
     this.textContent = `Follow Roads: ${isFollowRoads ? 'ON' : 'OFF'}`;
     this.classList.toggle("active");
+    // If manually toggled while Freehand is active, keep the "restore on
+    // Freehand-off" value in sync - otherwise turning Freehand off later
+    // would silently discard this manual change and revert to whatever
+    // Follow Roads was BEFORE Freehand was turned on.
+    if (isFreehandMode) followRoadsBeforeFreehand = isFollowRoads;
     // Re-render the existing route in the new mode immediately, instead of
     // only affecting points added after the toggle.
     await rebuildRoute();
