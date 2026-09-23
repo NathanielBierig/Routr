@@ -12,6 +12,25 @@ const map = new mapboxgl.Map({
     zoom: 13
 });
 
+// The Standard style is 3D/WebGL2-heavy (terrain, lighting presets) and can
+// fail to render - silently, with the HUD/controls still working fine since
+// those are plain DOM, just the map canvas staying blank/gray - on older or
+// resource-constrained mobile browsers that don't fully support it, even
+// with a valid token and no content blocking. If Mapbox GL JS reports an
+// error, fall back once to the classic dark-v11 style, which needs far
+// less GPU capability and keeps the same dark aesthetic (no 3D lighting
+// config, so the lightPreset/fog/projection calls tuned for Standard don't
+// apply to it - that's fine, dark-v11 doesn't need them to render dark).
+let usedFallbackStyle = false;
+map.on("error", (e) => {
+    console.error("Mapbox error:", e && e.error);
+    if (!usedFallbackStyle) {
+        usedFallbackStyle = true;
+        console.warn("Falling back to mapbox://styles/mapbox/dark-v11 after a map error.");
+        map.setStyle("mapbox://styles/mapbox/dark-v11");
+    }
+});
+
 // State
 const route = [];
 // legModes[i] records whether the leg between route[i] and route[i+1] was
