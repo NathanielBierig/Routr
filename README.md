@@ -1,7 +1,7 @@
 # Routr
 
-### 🏃 [**Open the live app →**](https://nathanielbierig.github.io/point-map/)
-### https://nathanielbierig.github.io/point-map/
+### 🏃 [**Open the live app →**](https://nathanielbierig.github.io/Routr/)
+### https://nathanielbierig.github.io/Routr/
 
 No account, no install, no setup — works on any device, any network.
 
