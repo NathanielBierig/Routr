@@ -3,7 +3,8 @@
 Plan a running route by drawing it directly on a map — see distance, time,
 and pace instantly. No account, no app install, just click and go.
 
-**Live app:** https://nathanielbierig.github.io/point-map/
+**Live app:** https://nathanielbierig.github.io/point-map/ — always
+available, no setup, works on any device/network. Just open it.
 
 ## What it's for
 
@@ -46,14 +47,17 @@ Vanilla JavaScript, no build step or framework. [Mapbox GL
 JS](https://docs.mapbox.com/mapbox-gl-js/) for the map and rendering,
 Mapbox Directions and Geocoding APIs for road-snapping and search.
 
-## Running it locally
+## Development
+
+For editing the code — not needed to just use the app (use the live link
+above for that).
 
 ```
 python -m http.server 8000
 ```
 
 Then open `http://localhost:8000`. You'll need your own `tokens.js`
-(gitignored) with a Mapbox access token:
+(gitignored, never committed) with a Mapbox access token:
 
 ```js
 const MAPBOX_TOKEN = "pk.your_token_here";
