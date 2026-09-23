@@ -534,6 +534,49 @@ body {
     font-size: 13px;
 }
 
+#suggestBody select {
+    /* Without this, Safari/WebKit ignores most of the rule above and
+       renders the closed select with its own default white/light chrome
+       and black text - the one element that visibly broke the dark theme
+       (confirmed via real WebKit/iPhone testing), even though every other
+       input in this panel themed correctly. Removing native appearance
+       also removes the native arrow, so a custom one is drawn in its
+       place via background-image. The open dropdown LIST itself still
+       uses the OS's native picker on iOS (that part can't be themed via
+       CSS, and matches what iOS users already expect from any select). */
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: rgba(255, 255, 255, 0.08);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2300ff88'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px;
+    padding-right: 36px;
+    cursor: pointer;
+}
+
+#suggestBody select option {
+    background: #15151f;
+    color: #e0e0ff;
+}
+
+/* Same issue as the select above, different element: a number input's
+   native up/down spinner renders as a plain white box, breaking the dark
+   theme (caught in the same screenshot as the select, on #suggestDistance
+   - but #paceInput in the main HUD has the identical issue, so this is
+   app-wide rather than scoped to one panel). */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
 #suggestGoBtn,
 #useSuggestedRouteBtn {
     padding: 10px 16px;
