@@ -48,6 +48,11 @@ let followRoadsBeforeFreehand = true;
 // recognizable path shape while cutting vertex count by ~5x.
 const MIN_FREEHAND_POINT_METERS = 20;
 
+// Tracks how many route[] points each user action added, in order, so
+// undo() can pop a whole action (e.g. a 20-point freehand stroke) in one
+// press instead of requiring one Undo click per captured point.
+let undoGroups = [];
+
 // Neon colors for legs (cycle through). Was only 6 truly unique colors
 // padded to array-length 8 by repeating the first two, so any route with
 // 7-8+ legs (a realistic detailed loop) already started repeating a color
@@ -164,7 +169,14 @@ function updateMarkers() {
             .setLngLat(point)
             .addTo(map);
 
-        marker.on('dragstart', () => { el.style.cursor = 'grabbing'; });
+        // Distinguishes a plain click (open the info/delete popup) from a
+        // drag-release (Mapbox also fires a click on the marker element at
+        // the end of a drag) - without this, dragging a point would also
+        // pop the info panel open.
+        let didDrag = false;
+
+        marker.on('dragstart', () => { el.style.cursor = 'grabbing'; didDrag = false; });
+        marker.on('drag', () => { didDrag = true; });
 
         marker.on('dragend', async () => {
             el.style.cursor = 'grab';
@@ -174,8 +186,74 @@ function updateMarkers() {
             updateMarkers();
         });
 
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (didDrag) return;
+            showPointInfoPopup(idx, route[idx]);
+        });
+
         markers.push(marker);
     });
+}
+
+let activeInfoPopup = null;
+
+async function showPointInfoPopup(idx, point) {
+    if (activeInfoPopup) activeInfoPopup.remove();
+
+    const popupEl = document.createElement('div');
+    popupEl.className = 'point-info-popup';
+    popupEl.innerHTML = `
+        <div class="point-info-address">Loading address...</div>
+        <button class="point-info-delete">Delete Point</button>
+    `;
+
+    activeInfoPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: false, offset: 16, className: 'point-info-popup-wrap' })
+        .setLngLat(point)
+        .setDOMContent(popupEl)
+        .addTo(map);
+
+    popupEl.querySelector('.point-info-delete').addEventListener('click', () => deletePoint(idx));
+
+    const address = await getAddressFromCoords(point[0], point[1]);
+    // The popup may have been closed (or replaced by a click on another
+    // point) while the reverse-geocode request was in flight.
+    if (activeInfoPopup && activeInfoPopup.isOpen()) {
+        const addrEl = popupEl.querySelector('.point-info-address');
+        if (addrEl) addrEl.textContent = address;
+    }
+}
+
+function deletePoint(index) {
+    if (index < 0 || index >= route.length) return;
+
+    const isFirst = index === 0;
+    const isLast = index === route.length - 1;
+    route.splice(index, 1);
+
+    // Removing a middle point merges its two adjacent legs into one; keep
+    // the mode of the leg before it rather than guessing.
+    if (isFirst) {
+        if (legModes.length > 0) legModes.splice(0, 1);
+    } else if (isLast) {
+        legModes.splice(index - 1, 1);
+    } else {
+        const mergedMode = legModes[index - 1];
+        legModes.splice(index - 1, 2, mergedMode);
+    }
+    // Point counts no longer line up with prior actions' undo groups after
+    // an out-of-order deletion - reset to one group per remaining point,
+    // same as after a reorder.
+    undoGroups = route.map(() => 1);
+
+    if (activeInfoPopup) {
+        activeInfoPopup.remove();
+        activeInfoPopup = null;
+    }
+
+    rebuildRoute();
+    updateMarkers();
+    updateHUD();
 }
 
 function getDistanceInMiles(lat1, lon1, lat2, lon2) {
@@ -319,6 +397,10 @@ async function commitFreehandPath() {
     }
 
     route.push(...pointsToAdd);
+    // One undo group for the whole stroke, however many points it captured,
+    // so a single Undo press removes the entire freehand trace instead of
+    // needing one press per captured point.
+    if (pointsToAdd.length > 0) undoGroups.push(pointsToAdd.length);
     // Freehand-committed legs are always straight-line, regardless of the
     // current Follow Roads setting - that's the whole point of the mode.
     while (legModes.length < route.length - 1) legModes.push(false);
@@ -575,6 +657,7 @@ function showSnapIndicator(clickedPoint) {
 
 async function addPoint(point) {
     route.push(point);
+    undoGroups.push(1);
     if (route.length >= 2) legModes.push(isFollowRoads);
 
     if (route.length >= 2) {
@@ -589,15 +672,22 @@ async function addPoint(point) {
 function undo() {
     if (route.length === 0) return;
 
-    route.pop();
-    if (legModes.length > 0) legModes.pop();
+    // Pop a whole action at once (a single click = 1 point, a freehand
+    // stroke = however many points it captured) rather than one point per
+    // Undo press - without this, undoing a dense freehand stroke took as
+    // many clicks as the stroke had vertices.
+    const groupSize = undoGroups.pop() || 1;
+    route.splice(-groupSize, groupSize);
+    legModes.splice(-groupSize, groupSize);
     rebuildRoute();
     updateMarkers();
+    updateHUD();
 }
 
 function clear() {
     route.length = 0;
     legModes.length = 0;
+    undoGroups.length = 0;
     legs.length = 0;
     roadRoute = [];
     totalDistance = 0;
@@ -712,6 +802,7 @@ function updateReorderList() {
                 // use.
                 legModes.length = 0;
                 for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
+                undoGroups = route.map(() => 1);
                 await rebuildRoute();
                 updateMarkers();
                 updateReorderList();
@@ -756,6 +847,7 @@ function updateReorderList() {
             route.push(...reordered);
             legModes.length = 0;
             for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
+            undoGroups = route.map(() => 1);
 
             await rebuildRoute();
             updateMarkers();

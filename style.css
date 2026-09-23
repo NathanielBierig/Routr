@@ -185,7 +185,8 @@ body {
     box-shadow: 0 0 12px rgba(0, 255, 136, 0.3);
 }
 
-#controls button {
+#controls button,
+#moreMenu button {
     padding: 10px 16px;
     background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
     color: white;
@@ -204,7 +205,8 @@ body {
     justify-content: center;
 }
 
-#controls button:hover {
+#controls button:hover,
+#moreMenu button:hover {
     background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
     box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
     transform: translateY(-2px);
@@ -237,7 +239,8 @@ body {
         border-radius: 4px;
     }
 
-    #controls button {
+    #controls button,
+    #moreMenu button {
         padding: 8px 10px;
         font-size: 10px;
         border-radius: 4px;
@@ -364,6 +367,56 @@ body {
     0% { opacity: 1; }
     70% { opacity: 1; }
     100% { opacity: 0; pointer-events: none; }
+}
+
+.point-info-popup-wrap .mapboxgl-popup-content {
+    background: rgba(20, 20, 30, 0.98);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    padding: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.point-info-popup-wrap .mapboxgl-popup-close-button {
+    color: #b0b0cc;
+    font-size: 18px;
+    padding: 4px 8px;
+}
+
+.point-info-popup-wrap .mapboxgl-popup-close-button:hover {
+    color: #00ff88;
+    background: transparent;
+}
+
+.point-info-popup-wrap .mapboxgl-popup-tip {
+    border-top-color: rgba(20, 20, 30, 0.98);
+    border-bottom-color: rgba(20, 20, 30, 0.98);
+}
+
+.point-info-address {
+    color: #e0e0ff;
+    font-size: 12px;
+    margin-bottom: 10px;
+    max-width: 200px;
+}
+
+.point-info-delete {
+    width: 100%;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, #ff3b5c 0%, #c9184a 100%);
+    color: white;
+    border: 1px solid rgba(255, 59, 92, 0.5);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.point-info-delete:hover {
+    box-shadow: 0 0 16px rgba(255, 59, 92, 0.5);
 }
 
 .snap-ring {
