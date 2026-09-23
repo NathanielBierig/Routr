@@ -421,17 +421,29 @@ async function getRoadRoute(startIdx, endIdx) {
 
         const url =
             `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinates}` +
-            `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+            `?geometries=geojson&steps=true&access_token=${mapboxgl.accessToken}`;
 
         const response = await fetch(url);
         const data = await response.json();
 
         if (data.routes && data.routes.length > 0) {
             const leg = data.routes[0];
+            // steps=true gives turn-by-turn instructions per Directions leg
+            // (Mapbox's own "legs", one per waypoint pair - here always
+            // exactly one, since getRoadRoute is only ever called for a
+            // single a->b pair). Each step's maneuver.instruction already
+            // includes the street name (e.g. "Turn right onto Main St"),
+            // so the Directions panel can show "what to look for" instead
+            // of just a distance number.
+            const steps = (leg.legs && leg.legs[0] && leg.legs[0].steps) || [];
             return {
                 coordinates: leg.geometry.coordinates,
                 distance: leg.distance,
-                duration: leg.duration
+                duration: leg.duration,
+                steps: steps.map(s => ({
+                    instruction: s.maneuver.instruction,
+                    distance: s.distance
+                }))
             };
         }
         // Mapbox found no walking route (e.g. unmapped park trail) - fall back
@@ -513,7 +525,8 @@ async function rebuildRoute() {
                 coordinates: legData.coordinates,
                 distance: legData.distance,
                 duration: legData.duration,
-                isFallback: !!legData.isFallback
+                isFallback: !!legData.isFallback,
+                steps: legData.steps || []
             });
             newRoadRoute.push(...coords);
             newTotalDistance += legData.distance;
@@ -863,6 +876,169 @@ function toggleReorderPanel() {
     if (!panel.classList.contains("hidden")) {
         updateReorderList();
     }
+}
+
+// Flattens every leg's turn-by-turn steps (each already includes the
+// street name via Mapbox's maneuver.instruction, e.g. "Turn right onto
+// Main St") into one ordered list for the whole route, so a runner can
+// see what to look for at each turn instead of just a distance total.
+// Straight-line (fallback/freehand) legs have no steps - shown as a
+// single "off-road" entry instead of turn instructions that don't apply.
+function updateDirectionsList() {
+    const listEl = document.getElementById("directionsList");
+    listEl.innerHTML = "";
+
+    if (legs.length === 0) {
+        listEl.innerHTML = `<div class="direction-empty">Draw a route to see directions.</div>`;
+        return;
+    }
+
+    let stepNum = 1;
+    let hasAny = false;
+    legs.forEach((leg) => {
+        if (leg.isFallback || leg.steps.length === 0) {
+            const distanceKm = leg.distance / 1000;
+            const item = document.createElement("div");
+            item.className = "direction-step";
+            item.innerHTML = `<span class="step-num">${stepNum}</span>` +
+                `<span>Off-road section (no street to follow)</span>` +
+                `<span class="step-dist">${distanceKm.toFixed(2)} km</span>`;
+            listEl.appendChild(item);
+            stepNum++;
+            hasAny = true;
+            return;
+        }
+        leg.steps.forEach((step) => {
+            // Mapbox includes a zero-distance "arrive" step at the very end
+            // of each leg - skip it here since the next leg (or the route's
+            // own end) already conveys that.
+            if (step.distance === 0) return;
+            const item = document.createElement("div");
+            item.className = "direction-step";
+            item.innerHTML = `<span class="step-num">${stepNum}</span>` +
+                `<span>${escapeHtml(step.instruction)}</span>` +
+                `<span class="step-dist">${(step.distance).toFixed(0)} m</span>`;
+            listEl.appendChild(item);
+            stepNum++;
+            hasAny = true;
+        });
+    });
+
+    if (!hasAny) {
+        listEl.innerHTML = `<div class="direction-empty">No turn-by-turn steps for this route.</div>`;
+    }
+}
+
+function toggleDirectionsPanel() {
+    const panel = document.getElementById("directionsPanel");
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")) {
+        updateDirectionsList();
+    }
+}
+
+// Escapes user- or API-derived text before it's dropped into innerHTML -
+// street names and saved-route names are both effectively untrusted
+// strings (an OSM name field or a runner's own typed input), so this
+// avoids building HTML via string concatenation with either.
+function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Saved routes: no accounts/backend - just named routes kept in this
+// browser's localStorage. Per-device only (won't sync across a phone and
+// a laptop), but needs zero infrastructure. A route[] + legModes[] pair
+// is everything rebuildRoute() needs to fully reconstruct a route, so
+// that's all that's stored.
+const SAVED_ROUTES_KEY = "routr_saved_routes";
+
+function getSavedRoutes() {
+    try {
+        return JSON.parse(localStorage.getItem(SAVED_ROUTES_KEY)) || [];
+    } catch (err) {
+        return [];
+    }
+}
+
+function setSavedRoutes(routes) {
+    try {
+        localStorage.setItem(SAVED_ROUTES_KEY, JSON.stringify(routes));
+        return true;
+    } catch (err) {
+        alert("Couldn't save - your browser's local storage may be full or disabled.");
+        return false;
+    }
+}
+
+function saveCurrentRoute(name) {
+    if (route.length < 2) return;
+    const routes = getSavedRoutes();
+    routes.push({
+        id: Date.now().toString(36),
+        name: (name || "").trim() || `Route ${routes.length + 1}`,
+        savedAt: Date.now(),
+        distanceKm: totalDistance / 1000,
+        route: route.map(p => [p[0], p[1]]),
+        legModes: legModes.slice()
+    });
+    return setSavedRoutes(routes);
+}
+
+async function loadSavedRoute(id) {
+    const saved = getSavedRoutes().find(r => r.id === id);
+    if (!saved) return;
+
+    route.length = 0;
+    route.push(...saved.route);
+    legModes.length = 0;
+    legModes.push(...saved.legModes);
+    // Loading a saved route replaces the whole route as one atomic action,
+    // same treatment as a suggested route - one Undo press removes it.
+    undoGroups = [route.length];
+
+    document.getElementById("myRoutesPanel").classList.add("hidden");
+    await rebuildRoute();
+    updateMarkers();
+    updateHUD();
+}
+
+function deleteSavedRoute(id) {
+    setSavedRoutes(getSavedRoutes().filter(r => r.id !== id));
+    renderMyRoutesList();
+}
+
+function renderMyRoutesList() {
+    const listEl = document.getElementById("myRoutesList");
+    const routes = getSavedRoutes();
+    listEl.innerHTML = "";
+
+    if (routes.length === 0) {
+        listEl.innerHTML = `<div class="direction-empty">No saved routes yet.</div>`;
+        return;
+    }
+
+    routes.slice().reverse().forEach((r) => {
+        const item = document.createElement("div");
+        item.className = "saved-route-item";
+        const date = new Date(r.savedAt).toLocaleDateString();
+        item.innerHTML = `
+            <div class="saved-route-info">
+                <div class="saved-route-name">${escapeHtml(r.name)}</div>
+                <div class="saved-route-meta">${r.distanceKm.toFixed(2)} km &middot; ${date}</div>
+            </div>
+            <div class="saved-route-actions">
+                <button class="saved-route-load">Load</button>
+                <button class="saved-route-delete">Delete</button>
+            </div>
+        `;
+        item.querySelector(".saved-route-load").addEventListener("click", () => loadSavedRoute(r.id));
+        item.querySelector(".saved-route-delete").addEventListener("click", () => {
+            if (confirm(`Delete "${r.name}"?`)) deleteSavedRoute(r.id);
+        });
+        listEl.appendChild(item);
+    });
 }
 
 // Center on the user's actual location instead of the hardcoded fallback
@@ -1298,6 +1474,35 @@ document.getElementById("addCurrentLocationBtn").addEventListener("click", funct
 document.getElementById("reorderBtn").addEventListener("click", toggleReorderPanel);
 
 document.getElementById("closeReorderBtn").addEventListener("click", toggleReorderPanel);
+
+document.getElementById("directionsBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    toggleDirectionsPanel();
+});
+
+document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDirectionsPanel);
+
+document.getElementById("myRoutesBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("myRoutesPanel").classList.remove("hidden");
+    renderMyRoutesList();
+});
+
+document.getElementById("myRoutesCloseBtn").addEventListener("click", () => {
+    document.getElementById("myRoutesPanel").classList.add("hidden");
+});
+
+document.getElementById("saveRouteConfirmBtn").addEventListener("click", () => {
+    if (route.length < 2) {
+        alert("Draw a route before saving.");
+        return;
+    }
+    const nameInput = document.getElementById("saveRouteName");
+    if (saveCurrentRoute(nameInput.value)) {
+        nameInput.value = "";
+        renderMyRoutesList();
+    }
+});
 
 document.getElementById("undoBtn").addEventListener("click", undo);
 
