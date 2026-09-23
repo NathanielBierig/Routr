@@ -267,6 +267,66 @@ function getDistanceInMiles(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+// Forward geodesic (destination point given a start, bearing, and
+// distance) - used by the route-suggestion feature to place out-and-back
+// candidate turnaround points around a start location.
+function destinationPoint(lng, lat, bearingDeg, distanceKm) {
+    const R = 6371;
+    const bearing = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lng * Math.PI / 180;
+    const dR = distanceKm / R;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dR) + Math.cos(lat1) * Math.sin(dR) * Math.cos(bearing));
+    const lon2 = lon1 + Math.atan2(
+        Math.sin(bearing) * Math.sin(dR) * Math.cos(lat1),
+        Math.cos(dR) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI];
+}
+
+// EXPERIMENTAL: suggest an out-and-back route of roughly the target
+// distance from a start point. No route-optimization API involved - just
+// candidate turnaround points ringed around the start at several
+// bearings, each scored by asking Mapbox Directions for the REAL
+// road-snapped round-trip distance (a straight-line guess is unreliable
+// once roads wind around). 1.3 is a rough real-world indirection factor
+// for street grids (roads rarely run straight toward a target); actual
+// results still vary by neighborhood, which is why every candidate gets
+// measured rather than assumed.
+async function suggestRoutes(targetKm) {
+    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+    const bearings = [0, 45, 90, 135, 180, 225, 270, 315];
+    const radiusKm = (targetKm / 2) / 1.3;
+
+    const attempts = await Promise.all(bearings.map(async (bearing) => {
+        const candidate = destinationPoint(start[0], start[1], bearing, radiusKm);
+        try {
+            const coords = [start, candidate, start].map(p => p.join(",")).join(";");
+            const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coords}` +
+                `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            if (!data.routes || data.routes.length === 0) return null;
+            const result = data.routes[0];
+            const distanceKm = result.distance / 1000;
+            return {
+                bearing,
+                candidate,
+                distanceKm,
+                coordinates: result.geometry.coordinates,
+                diff: Math.abs(distanceKm - targetKm)
+            };
+        } catch (err) {
+            return null;
+        }
+    }));
+
+    return attempts
+        .filter(Boolean)
+        .sort((a, b) => a.diff - b.diff)
+        .slice(0, 3);
+}
+
 let searchMarker = null;
 
 async function searchPlace(query) {
@@ -1264,6 +1324,118 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
 document.getElementById("moreMenuBtn").addEventListener("click", function () {
     document.getElementById("moreMenu").classList.toggle("hidden");
 });
+
+// EXPERIMENTAL: route suggestion. Shows a candidate as a dashed preview
+// line on the map before committing - only "Use This Route" replaces the
+// current route[]/legModes/undoGroups state (as one atomic, one-press
+// undoable action).
+let suggestedOption = null;
+
+function showSuggestPreview(option) {
+    suggestedOption = option;
+    const data = {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: option.coordinates }
+    };
+    if (!map.getSource("suggest-preview")) {
+        map.addSource("suggest-preview", { type: "geojson", data });
+        map.addLayer({
+            id: "suggest-preview-line",
+            type: "line",
+            source: "suggest-preview",
+            paint: {
+                "line-width": 5,
+                "line-color": "#FFD700",
+                "line-opacity": 0.9,
+                "line-dasharray": [2, 1.5]
+            }
+        });
+    } else {
+        map.getSource("suggest-preview").setData(data);
+    }
+    const bounds = option.coordinates.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(option.coordinates[0], option.coordinates[0])
+    );
+    map.fitBounds(bounds, { padding: 60 });
+    document.getElementById("useSuggestedRouteBtn").disabled = false;
+}
+
+function clearSuggestPreview() {
+    suggestedOption = null;
+    if (map.getSource("suggest-preview")) {
+        map.getSource("suggest-preview").setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [] }
+        });
+    }
+    document.getElementById("useSuggestedRouteBtn").disabled = true;
+}
+
+async function useSuggestedRoute() {
+    if (!suggestedOption) return;
+    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+
+    route.length = 0;
+    route.push(start, suggestedOption.candidate, start);
+    legModes.length = 0;
+    legModes.push(true, true);
+    undoGroups = [route.length];
+
+    clearSuggestPreview();
+    document.getElementById("suggestPanel").classList.add("hidden");
+    document.getElementById("suggestResults").innerHTML = "";
+
+    await rebuildRoute();
+    updateMarkers();
+    updateHUD();
+}
+
+document.getElementById("suggestRouteBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("suggestPanel").classList.remove("hidden");
+});
+
+document.getElementById("suggestCloseBtn").addEventListener("click", () => {
+    document.getElementById("suggestPanel").classList.add("hidden");
+    clearSuggestPreview();
+});
+
+document.getElementById("suggestGoBtn").addEventListener("click", async function () {
+    const targetKm = parseFloat(document.getElementById("suggestDistance").value) || 5;
+    const resultsEl = document.getElementById("suggestResults");
+    const btn = this;
+
+    clearSuggestPreview();
+    btn.disabled = true;
+    resultsEl.innerHTML = `<div class="suggest-loading">Finding routes...</div>`;
+
+    const options = await suggestRoutes(targetKm);
+    btn.disabled = false;
+
+    if (options.length === 0) {
+        resultsEl.innerHTML = `<div class="suggest-loading">No routes found nearby - try a different distance.</div>`;
+        return;
+    }
+
+    resultsEl.innerHTML = "";
+    options.forEach((opt, i) => {
+        const item = document.createElement("div");
+        item.className = "suggest-option";
+        item.textContent = `Option ${i + 1}: ${opt.distanceKm.toFixed(2)} km`;
+        item.addEventListener("click", () => {
+            document.querySelectorAll(".suggest-option").forEach(el => el.classList.remove("selected"));
+            item.classList.add("selected");
+            showSuggestPreview(opt);
+        });
+        resultsEl.appendChild(item);
+    });
+
+    resultsEl.firstChild.classList.add("selected");
+    showSuggestPreview(options[0]);
+});
+
+document.getElementById("useSuggestedRouteBtn").addEventListener("click", useSuggestedRoute);
 
 // Explicit, opt-in action - unlike the on-load map centering (which only
 // pans the camera), this actually adds the user's current GPS position as
