@@ -1,4 +1,4 @@
-# Draw Route
+# Routr
 
 Runner route-drawing web app (vanilla JS + Mapbox GL JS). Design a route on a
 map, see distance/time instantly — not turn-by-turn A→B navigation.
