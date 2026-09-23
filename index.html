@@ -13,11 +13,35 @@
 <body>
 
     <div id="hud">
-        <div id="distance">Distance: 0 km</div>
-        <div id="time">Walking: 0 min</div>
+        <div id="stats">
+            <div id="distance">Distance: 0 km</div>
+            <div id="walkingTime">Walking: 0 min</div>
+            <div id="runningTime">Running: 0 min</div>
+            <div id="pace">Pace: 0 min/km</div>
+        </div>
+        <div id="controls">
+            <input type="text" id="searchInput" placeholder="Search place...">
+            <label>
+                Running Pace (min/km):
+                <input type="number" id="paceInput" value="5" min="1" max="20" step="0.1">
+            </label>
+            <button id="toggleDrawMode">Drawing Mode: ON</button>
+            <button id="toggleFollowRoads">Follow Roads: ON</button>
+            <button id="reorderBtn">Reorder Points</button>
+            <button id="undoBtn">Undo</button>
+            <button id="clearBtn">Clear</button>
+            <button id="closeLoopBtn">Close Loop</button>
+        </div>
     </div>
 
-    
+    <div id="reorderPanel" class="hidden">
+        <div id="reorderHeader">
+            <h2>Waypoints</h2>
+            <button id="closeReorderBtn">×</button>
+        </div>
+        <div id="reorderList"></div>
+    </div>
+
     <div id="map"></div>
 
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.15.0/mapbox-gl.js"></script>
