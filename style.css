@@ -268,7 +268,8 @@ body {
 #reorderPanel,
 #directionsPanel,
 #myRoutesPanel,
-#elevationPanel {
+#elevationPanel,
+#suggestPanel {
     position: fixed;
     right: 0;
     top: 0;
@@ -290,7 +291,8 @@ body {
     #reorderPanel,
     #directionsPanel,
     #myRoutesPanel,
-    #elevationPanel {
+    #elevationPanel,
+    #suggestPanel {
         width: 100%;
     }
 }
@@ -298,21 +300,24 @@ body {
 #reorderPanel:not(.hidden),
 #directionsPanel:not(.hidden),
 #myRoutesPanel:not(.hidden),
-#elevationPanel:not(.hidden) {
+#elevationPanel:not(.hidden),
+#suggestPanel:not(.hidden) {
     transform: translateX(0);
 }
 
 #reorderPanel.hidden,
 #directionsPanel.hidden,
 #myRoutesPanel.hidden,
-#elevationPanel.hidden {
+#elevationPanel.hidden,
+#suggestPanel.hidden {
     display: none;
 }
 
 #reorderHeader,
 #directionsHeader,
 #myRoutesHeader,
-#elevationHeader {
+#elevationHeader,
+#suggestHeader {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -323,7 +328,8 @@ body {
 #reorderHeader h2,
 #directionsHeader h2,
 #myRoutesHeader h2,
-#elevationHeader h2 {
+#elevationHeader h2,
+#suggestHeader h2 {
     margin: 0;
     color: #00ff88;
     font-size: 14px;
@@ -334,7 +340,8 @@ body {
 #closeReorderBtn,
 #closeDirectionsBtn,
 #myRoutesCloseBtn,
-#closeElevationBtn {
+#closeElevationBtn,
+#suggestCloseBtn {
     background: none;
     border: none;
     color: #b0b0cc;
@@ -351,7 +358,8 @@ body {
 #closeReorderBtn:hover,
 #closeDirectionsBtn:hover,
 #myRoutesCloseBtn:hover,
-#closeElevationBtn:hover {
+#closeElevationBtn:hover,
+#suggestCloseBtn:hover {
     color: #00ff88;
 }
 
@@ -488,6 +496,98 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+#suggestBody {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.suggest-hint {
+    color: #7a7a9e;
+    font-size: 11px;
+    line-height: 1.5;
+    margin: 0;
+}
+
+#suggestBody label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #b0b0cc;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+#suggestBody input,
+#suggestBody select {
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #00ff88;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+#suggestGoBtn,
+#useSuggestedRouteBtn {
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    border: 1px solid rgba(99, 102, 241, 0.5);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    min-height: 44px;
+}
+
+#useSuggestedRouteBtn {
+    background: linear-gradient(135deg, #00ff88 0%, #00dd77 100%);
+    border-color: #00ff88;
+    color: #0f0f15;
+}
+
+#useSuggestedRouteBtn:disabled {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: #555566;
+    cursor: not-allowed;
+}
+
+#suggestResults {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.suggest-option {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 8px;
+    padding: 12px;
+    cursor: pointer;
+    color: #e0e0ff;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.suggest-option:hover {
+    background: rgba(99, 102, 241, 0.2);
+}
+
+.suggest-option.selected {
+    background: rgba(0, 255, 136, 0.15);
+    border-color: #00ff88;
+    color: #00ff88;
 }
 
 .saved-route-item {

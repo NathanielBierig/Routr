@@ -71,6 +71,18 @@ if (!hasWebGLSupport()) {
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
+// Mapbox GL JS does NOT correctly shape right-to-left scripts (Hebrew,
+// Arabic) out of the box - without this plugin, place labels in RTL
+// languages render with their characters in the wrong order (reported:
+// Hebrew location names in Israel showing backwards). `true` lazy-loads
+// the plugin only if an RTL-script label is actually encountered, so it
+// costs nothing for maps that never need it.
+mapboxgl.setRTLTextPlugin(
+    "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js",
+    null,
+    true
+);
+
 const map = new mapboxgl.Map({
     container: "map",
     style: "mapbox://styles/mapbox/standard",
@@ -588,6 +600,145 @@ function exportGPX() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// EXPERIMENTAL route suggestion. No optimization API or ML - candidate
+// loop shapes ringed around a start point at several bearings, each
+// scored by asking Mapbox Directions for the REAL road-snapped distance
+// (a straight-line guess is unreliable once roads wind around).
+function destinationPoint(lng, lat, bearingDeg, distanceKm) {
+    const R = 6371;
+    const bearing = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lng * Math.PI / 180;
+    const dR = distanceKm / R;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dR) + Math.cos(lat1) * Math.sin(dR) * Math.cos(bearing));
+    const lon2 = lon1 + Math.atan2(
+        Math.sin(bearing) * Math.sin(dR) * Math.cos(lat1),
+        Math.cos(dR) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI];
+}
+
+// Builds candidate sets for a given shape: "outback" (straight there-and-
+// back), "triangle" (start + 2 interior points), or "square" (start + 3).
+// Radius is divided by the number of legs (not halved like an out-and-
+// back) since a loop's total length is the sum of all its legs, then by
+// 1.3 as a rough real-world road-indirection factor - roads rarely run
+// straight toward a target, so a candidate placed at the raw straight-
+// line radius usually comes back SHORTER than target once road-snapped.
+function buildSuggestCandidateSets(targetKm, shape) {
+    if (shape === "triangle") {
+        const radiusKm = (targetKm / 3) / 1.3;
+        const sets = [];
+        [0, 90, 180, 270].forEach(base => {
+            [110, 140].forEach(spread => sets.push({ radiusKm, bearings: [base, base + spread] }));
+        });
+        return sets;
+    }
+    if (shape === "square") {
+        const radiusKm = (targetKm / 4) / 1.3;
+        return [0, 30, 60, 90].map(base => ({ radiusKm, bearings: [base, base + 90, base + 180] }));
+    }
+    // "outback"
+    const radiusKm = (targetKm / 2) / 1.3;
+    return [0, 45, 90, 135, 180, 225, 270, 315].map(b => ({ radiusKm, bearings: [b] }));
+}
+
+async function suggestRoutes(targetKm, shape) {
+    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+    const candidateSets = buildSuggestCandidateSets(targetKm, shape);
+
+    const attempts = await Promise.all(candidateSets.map(async ({ radiusKm, bearings }) => {
+        const waypoints = bearings.map(b => destinationPoint(start[0], start[1], b, radiusKm));
+        try {
+            const coords = [start, ...waypoints, start].map(p => p.join(",")).join(";");
+            const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coords}` +
+                `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            if (!data.routes || data.routes.length === 0) return null;
+            const result = data.routes[0];
+            const distanceKm = result.distance / 1000;
+            return {
+                waypoints,
+                distanceKm,
+                coordinates: result.geometry.coordinates,
+                diff: Math.abs(distanceKm - targetKm)
+            };
+        } catch (err) {
+            return null;
+        }
+    }));
+
+    return attempts
+        .filter(Boolean)
+        .sort((a, b) => a.diff - b.diff)
+        .slice(0, 3);
+}
+
+let suggestedOption = null;
+
+function showSuggestPreview(option) {
+    suggestedOption = option;
+    const data = {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: option.coordinates }
+    };
+    if (!map.getSource("suggest-preview")) {
+        map.addSource("suggest-preview", { type: "geojson", data });
+        map.addLayer({
+            id: "suggest-preview-line",
+            type: "line",
+            source: "suggest-preview",
+            paint: {
+                "line-width": 5,
+                "line-color": "#FFD700",
+                "line-opacity": 0.9,
+                "line-dasharray": [2, 1.5]
+            }
+        });
+    } else {
+        map.getSource("suggest-preview").setData(data);
+    }
+    const bounds = option.coordinates.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(option.coordinates[0], option.coordinates[0])
+    );
+    map.fitBounds(bounds, { padding: 60 });
+    document.getElementById("useSuggestedRouteBtn").disabled = false;
+}
+
+function clearSuggestPreview() {
+    suggestedOption = null;
+    if (map.getSource("suggest-preview")) {
+        map.getSource("suggest-preview").setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [] }
+        });
+    }
+    document.getElementById("useSuggestedRouteBtn").disabled = true;
+}
+
+async function useSuggestedRoute() {
+    if (!suggestedOption) return;
+    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+
+    route.length = 0;
+    route.push(start, ...suggestedOption.waypoints, start);
+    legModes.length = 0;
+    for (let i = 0; i < route.length - 1; i++) legModes.push(true);
+    // Whole suggestion replaces the route as one atomic action, same
+    // treatment as loading a saved route - one Undo press removes it.
+    undoGroups = [route.length];
+
+    clearSuggestPreview();
+    document.getElementById("suggestPanel").classList.add("hidden");
+    document.getElementById("suggestResults").innerHTML = "";
+
+    await rebuildRoute();
+    updateMarkers();
+    updateHUD();
 }
 
 let searchMarker = null;
@@ -1807,6 +1958,53 @@ document.getElementById("directionsBtn").addEventListener("click", () => {
 });
 
 document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDirectionsPanel);
+
+document.getElementById("suggestRouteBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("suggestPanel").classList.remove("hidden");
+});
+
+document.getElementById("suggestCloseBtn").addEventListener("click", () => {
+    document.getElementById("suggestPanel").classList.add("hidden");
+    clearSuggestPreview();
+});
+
+document.getElementById("suggestGoBtn").addEventListener("click", async function () {
+    const targetKm = parseFloat(document.getElementById("suggestDistance").value) || 5;
+    const shape = document.getElementById("suggestShape").value;
+    const resultsEl = document.getElementById("suggestResults");
+    const btn = this;
+
+    clearSuggestPreview();
+    btn.disabled = true;
+    resultsEl.innerHTML = `<div class="direction-empty">Finding routes...</div>`;
+
+    const options = await suggestRoutes(targetKm, shape);
+    btn.disabled = false;
+
+    if (options.length === 0) {
+        resultsEl.innerHTML = `<div class="direction-empty">No routes found nearby - try a different distance.</div>`;
+        return;
+    }
+
+    resultsEl.innerHTML = "";
+    options.forEach((opt, i) => {
+        const item = document.createElement("div");
+        item.className = "suggest-option";
+        item.textContent = `Option ${i + 1}: ${opt.distanceKm.toFixed(2)} km`;
+        item.addEventListener("click", () => {
+            document.querySelectorAll(".suggest-option").forEach(el => el.classList.remove("selected"));
+            item.classList.add("selected");
+            showSuggestPreview(opt);
+        });
+        resultsEl.appendChild(item);
+    });
+
+    resultsEl.firstChild.classList.add("selected");
+    showSuggestPreview(options[0]);
+});
+
+document.getElementById("useSuggestedRouteBtn").addEventListener("click", useSuggestedRoute);
 
 document.getElementById("elevationBtn").addEventListener("click", () => {
     document.getElementById("moreMenu").classList.add("hidden");
