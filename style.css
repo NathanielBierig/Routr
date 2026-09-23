@@ -31,6 +31,14 @@ body {
 
     font-size: 13px;
     max-width: 280px;
+    /* No cap here previously - only the mobile media query set one, so on
+       desktop a tall More menu (enough secondary buttons) could push the
+       panel's bottom past the viewport with no way to reach it. This scrolls
+       internally instead once content exceeds the available height. The
+       mobile media query below sets its own max-height, which overrides
+       this at that breakpoint as normal. */
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
 }
 
 #hudToggle {
@@ -120,6 +128,19 @@ body {
 
 #moreMenu.hidden {
     display: none;
+}
+
+/* Secondary actions (Reorder/Directions/My Routes/Undo/Clear/Close Loop)
+   don't need the same large touch-friendly sizing as the primary controls
+   on desktop, where there's no touch target minimum to satisfy - shrinking
+   them keeps the whole menu shorter so it's less likely to need scrolling
+   at all. Scoped to pointer:fine (mouse) so mobile keeps its 44px targets. */
+@media (min-width: 769px) and (pointer: fine) {
+    #moreMenu button {
+        padding: 6px 14px;
+        min-height: 32px;
+        font-size: 11px;
+    }
 }
 
 @media (max-width: 768px) {
