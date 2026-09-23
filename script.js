@@ -121,8 +121,7 @@ const MINIMAL_FALLBACK_STYLE = {
         { id: "road-minor", type: "line", source: "streets", "source-layer": "road", filter: ["in", ["get", "class"], ["literal", ["street", "street_limited", "service", "track", "path"]]], paint: { "line-color": "#2a2a3a", "line-width": 1 } },
         { id: "road-major", type: "line", source: "streets", "source-layer": "road", filter: ["in", ["get", "class"], ["literal", ["primary", "secondary", "tertiary", "trunk"]]], paint: { "line-color": "#3a3a4a", "line-width": 1.5 } },
         { id: "road-motorway", type: "line", source: "streets", "source-layer": "road", filter: ["==", ["get", "class"], "motorway"], paint: { "line-color": "#4a4a5a", "line-width": 2 } },
-        { id: "place-label", type: "symbol", source: "streets", "source-layer": "place_label", layout: { "text-field": ["get", "name"], "text-size": 12 }, paint: { "text-color": "#8888aa", "text-halo-color": "#0f0f15", "text-halo-width": 1 } },
-        { id: "road-label", type: "symbol", source: "streets", "source-layer": "road_label", layout: { "text-field": ["get", "name"], "text-size": 10, "symbol-placement": "line" }, paint: { "text-color": "#666680", "text-halo-color": "#0f0f15", "text-halo-width": 1 } }
+        { id: "place-label", type: "symbol", source: "streets", "source-layer": "place_label", layout: { "text-field": ["get", "name"], "text-size": 12 }, paint: { "text-color": "#8888aa", "text-halo-color": "#0f0f15", "text-halo-width": 1 } }
     ]
 };
 
