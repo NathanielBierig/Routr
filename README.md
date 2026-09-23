@@ -1,10 +1,14 @@
 # Routr
 
-Plan a running route by drawing it directly on a map — see distance, time,
-and pace instantly. No account, no app install, just click and go.
+### 🏃 [**Open the live app →**](https://nathanielbierig.github.io/point-map/)
+### https://nathanielbierig.github.io/point-map/
 
-**Live app:** https://nathanielbierig.github.io/point-map/ — always
-available, no setup, works on any device/network. Just open it.
+No account, no install, no setup — works on any device, any network.
+
+---
+
+Plan a running route by drawing it directly on a map — see distance, time,
+and pace instantly.
 
 ## What it's for
 
