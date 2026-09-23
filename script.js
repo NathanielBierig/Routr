@@ -404,6 +404,192 @@ function getDistanceInMiles(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+// Elevation profile. Computed lazily - only when the Elevation panel is
+// actually opened, never automatically on every route edit - since each
+// sample point costs a real Mapbox tile request (Terrain-RGB), and this
+// app's whole design has been about not burning API quota on things the
+// user isn't actively looking at. Terrain-RGB is a SINGLE tileset (not
+// the composite multi-tileset bundle official styles need), so it isn't
+// affected by the account-level composite-access issue documented above.
+const terrainTileCache = new Map();
+
+function lngLatToTileFloat(lng, lat, zoom) {
+    const n = Math.pow(2, zoom);
+    const x = (lng + 180) / 360 * n;
+    const latRad = lat * Math.PI / 180;
+    const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+    return { x, y };
+}
+
+function loadTerrainTile(zoom, x, y) {
+    const key = `${zoom}/${x}/${y}`;
+    if (terrainTileCache.has(key)) return terrainTileCache.get(key);
+    const promise = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0);
+            resolve(ctx);
+        };
+        img.onerror = reject;
+        img.src = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${zoom}/${x}/${y}.pngraw?access_token=${mapboxgl.accessToken}`;
+    });
+    terrainTileCache.set(key, promise);
+    return promise;
+}
+
+async function getElevationAtPoint(lng, lat, zoom = 14) {
+    const tileFloat = lngLatToTileFloat(lng, lat, zoom);
+    const tx = Math.floor(tileFloat.x);
+    const ty = Math.floor(tileFloat.y);
+    const ctx = await loadTerrainTile(zoom, tx, ty);
+    const px = Math.min(255, Math.floor((tileFloat.x - tx) * 256));
+    const py = Math.min(255, Math.floor((tileFloat.y - ty) * 256));
+    const [r, g, b] = ctx.getImageData(px, py, 1, 1).data;
+    // Mapbox's documented Terrain-RGB decode formula.
+    return -10000 + ((r * 256 * 256 + g * 256 + b) * 0.1);
+}
+
+// Picks numSamples points evenly spaced BY DISTANCE (not by index) along
+// a dense polyline - a route with long straight stretches and tight turns
+// has points bunched unevenly, so sampling by raw index would waste
+// samples on the dense sections and miss the sparse ones.
+function sampleRouteByDistance(points, numSamples) {
+    if (points.length === 0) return [];
+    const cumDist = [0];
+    for (let i = 1; i < points.length; i++) {
+        const d = getDistanceInMiles(points[i - 1][1], points[i - 1][0], points[i][1], points[i][0]) * 1609.34;
+        cumDist.push(cumDist[i - 1] + d);
+    }
+    const total = cumDist[cumDist.length - 1];
+    if (total === 0) return [{ point: points[0], distanceM: 0 }];
+
+    const samples = [];
+    for (let s = 0; s <= numSamples; s++) {
+        const targetDist = (total * s) / numSamples;
+        let idx = cumDist.findIndex(d => d >= targetDist);
+        if (idx <= 0) idx = 1;
+        const d0 = cumDist[idx - 1], d1 = cumDist[idx];
+        const t = d1 > d0 ? (targetDist - d0) / (d1 - d0) : 0;
+        const p0 = points[idx - 1], p1 = points[idx];
+        samples.push({
+            point: [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t],
+            distanceM: targetDist
+        });
+    }
+    return samples;
+}
+
+const ELEVATION_SAMPLE_COUNT = 40;
+
+async function computeElevationProfile() {
+    if (roadRoute.length < 2) return null;
+    const samples = sampleRouteByDistance(roadRoute, ELEVATION_SAMPLE_COUNT);
+    const elevations = await Promise.all(samples.map(s => getElevationAtPoint(s.point[0], s.point[1])));
+
+    let gainM = 0, lossM = 0;
+    for (let i = 1; i < elevations.length; i++) {
+        const diff = elevations[i] - elevations[i - 1];
+        if (diff > 0) gainM += diff; else lossM += -diff;
+    }
+
+    const totalKm = totalDistance / 1000;
+    const gainPerKm = totalKm > 0 ? gainM / totalKm : 0;
+    // Rough, not a scientifically calibrated grading system - just enough
+    // to flag "this one's going to feel harder" at a glance.
+    let difficulty = "Easy";
+    if (gainPerKm > 50) difficulty = "Hard";
+    else if (gainPerKm > 20) difficulty = "Moderate";
+
+    return {
+        points: samples.map((s, i) => ({ distanceKm: s.distanceM / 1000, elevationM: elevations[i] })),
+        gainM, lossM, difficulty
+    };
+}
+
+function renderElevationChart(profile) {
+    const w = 260, h = 100, pad = 6;
+    const elevations = profile.points.map(p => p.elevationM);
+    const minE = Math.min(...elevations), maxE = Math.max(...elevations);
+    const range = Math.max(maxE - minE, 1);
+    const maxDist = profile.points[profile.points.length - 1].distanceKm || 1;
+
+    const linePoints = profile.points.map(p => {
+        const x = pad + (p.distanceKm / maxDist) * (w - 2 * pad);
+        const y = h - pad - ((p.elevationM - minE) / range) * (h - 2 * pad);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const fillPoints = `${pad},${h - pad} ${linePoints} ${w - pad},${h - pad}`;
+
+    return `
+        <div class="elevation-chart-wrap">
+            <svg viewBox="0 0 ${w} ${h}" width="100%" height="120" preserveAspectRatio="none">
+                <polygon points="${fillPoints}" fill="#00ff8822"/>
+                <polyline points="${linePoints}" fill="none" stroke="#00ff88" stroke-width="2"/>
+            </svg>
+            <div class="elevation-minmax">
+                <span>Min: ${minE.toFixed(0)} m</span>
+                <span>Max: ${maxE.toFixed(0)} m</span>
+            </div>
+        </div>
+    `;
+}
+
+async function updateElevationPanel() {
+    const content = document.getElementById("elevationContent");
+    if (roadRoute.length < 2) {
+        content.innerHTML = `<div class="direction-empty">Draw a route to see its elevation profile.</div>`;
+        return;
+    }
+    content.innerHTML = `<div class="direction-empty">Calculating elevation...</div>`;
+    try {
+        const profile = await computeElevationProfile();
+        content.innerHTML = `
+            <div class="elevation-stats">
+                <div>Gain<br>${Math.round(profile.gainM)} m</div>
+                <div>Loss<br>${Math.round(profile.lossM)} m</div>
+                <div>${profile.difficulty}</div>
+            </div>
+            ${renderElevationChart(profile)}
+        `;
+    } catch (err) {
+        console.error("Elevation fetch failed:", err);
+        content.innerHTML = `<div class="direction-empty">Couldn't load elevation data.</div>`;
+    }
+}
+
+// GPX export - a route[]/legModes[] pair only means anything to this app;
+// a .gpx file is the portable format watches, Strava, and other routing
+// apps actually understand, which is the whole point of planning a route
+// here ahead of a run.
+function buildGPX() {
+    const points = roadRoute.length >= 2 ? roadRoute : route;
+    const trkpts = points.map(p => `      <trkpt lat="${p[1]}" lon="${p[0]}"></trkpt>`).join("\n");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<gpx version="1.1" creator="Routr" xmlns="http://www.topografix.com/GPX/1/1">\n` +
+        `  <trk>\n    <name>Routr Route</name>\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>`;
+}
+
+function exportGPX() {
+    if (route.length < 2) {
+        alert("Draw a route before exporting.");
+        return;
+    }
+    const blob = new Blob([buildGPX()], { type: "application/gpx+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `routr-route-${Date.now()}.gpx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 let searchMarker = null;
 
 async function searchPlace(query) {
@@ -1621,6 +1807,21 @@ document.getElementById("directionsBtn").addEventListener("click", () => {
 });
 
 document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDirectionsPanel);
+
+document.getElementById("elevationBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("elevationPanel").classList.remove("hidden");
+    updateElevationPanel();
+});
+
+document.getElementById("closeElevationBtn").addEventListener("click", () => {
+    document.getElementById("elevationPanel").classList.add("hidden");
+});
+
+document.getElementById("exportGpxBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    exportGPX();
+});
 
 document.getElementById("myRoutesBtn").addEventListener("click", () => {
     document.getElementById("moreMenu").classList.add("hidden");
