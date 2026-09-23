@@ -408,6 +408,7 @@ body {
 
 .point-info-delete {
     width: 100%;
+    min-height: 44px;
     padding: 8px 12px;
     background: linear-gradient(135deg, #ff3b5c 0%, #c9184a 100%);
     color: white;

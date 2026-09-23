@@ -793,15 +793,12 @@ function updateReorderList() {
             const toIdx = idx;
 
             if (fromIdx !== toIdx) {
+                const oldRoute = route.slice();
+                const oldLegModes = legModes.slice();
                 const [movedPoint] = route.splice(fromIdx, 1);
                 route.splice(toIdx, 0, movedPoint);
-                // Reordering changes which points are adjacent, so the old
-                // per-leg modes no longer correspond to anything meaningful
-                // - re-derive every leg in the current mode rather than try
-                // to guess which mode a never-before-adjacent pair "should"
-                // use.
                 legModes.length = 0;
-                for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
+                legModes.push(...deriveLegModesForReorder(oldRoute, oldLegModes, route));
                 undoGroups = route.map(() => 1);
                 await rebuildRoute();
                 updateMarkers();
@@ -843,10 +840,12 @@ function updateReorderList() {
             // position, only DOM order changed during the drag.
             const newOrder = Array.from(list.children).map(el => parseInt(el.dataset.index));
             const reordered = newOrder.map(i => route[i]);
+            const oldRoute = route.slice();
+            const oldLegModes = legModes.slice();
             route.length = 0;
             route.push(...reordered);
             legModes.length = 0;
-            for (let i = 0; i < route.length - 1; i++) legModes.push(isFollowRoads);
+            legModes.push(...deriveLegModesForReorder(oldRoute, oldLegModes, route));
             undoGroups = route.map(() => 1);
 
             await rebuildRoute();
@@ -954,6 +953,32 @@ function getHitRadiusDegrees(pixelRadius = 18) {
 // using the same "leg 0 keeps its first point, later legs drop their
 // duplicate first point" accounting rebuildRoute() uses when concatenating
 // legs into roadRoute.
+// Reordering waypoints changes which points are adjacent, so the old
+// per-leg modes don't line up index-for-index with the new legs anymore.
+// Rather than blindly re-deriving every leg from the current global
+// Follow Roads toggle (which would silently re-snap or re-straighten
+// legs that weren't touched by the reorder - the exact bug legModes was
+// introduced to fix elsewhere), look up each new leg's endpoints against
+// the OLD adjacency: if that exact pair of points was adjacent before
+// (in either direction), keep whatever mode it had; only a genuinely new
+// adjacency falls back to the current global toggle.
+function deriveLegModesForReorder(oldRoute, oldLegModes, newRoute) {
+    const pairMode = new Map();
+    for (let i = 0; i < oldRoute.length - 1; i++) {
+        const a = oldRoute[i].join(',');
+        const b = oldRoute[i + 1].join(',');
+        const mode = oldLegModes[i] !== undefined ? oldLegModes[i] : isFollowRoads;
+        pairMode.set(`${a}|${b}`, mode);
+        pairMode.set(`${b}|${a}`, mode);
+    }
+    const result = [];
+    for (let i = 0; i < newRoute.length - 1; i++) {
+        const key = `${newRoute[i].join(',')}|${newRoute[i + 1].join(',')}`;
+        result.push(pairMode.has(key) ? pairMode.get(key) : isFollowRoads);
+    }
+    return result;
+}
+
 function roadRouteIndexToLegIndex(roadRouteIdx) {
     let cursor = 0;
     for (let i = 0; i < legs.length; i++) {
@@ -1040,6 +1065,7 @@ document.addEventListener("mousemove", async (e) => {
         route.splice(draggedPointIndex, 0, dragStartPoint.point);
         const originalMode = legModes[legIdx] !== undefined ? legModes[legIdx] : isFollowRoads;
         legModes.splice(legIdx, 1, originalMode, originalMode);
+        undoGroups.push(1);
         isDraggingLine = true;
     }
 
@@ -1147,6 +1173,7 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
             route.splice(draggedPointIndex, 0, touchStartPoint.point);
             const originalMode = legModes[legIdx] !== undefined ? legModes[legIdx] : isFollowRoads;
             legModes.splice(legIdx, 1, originalMode, originalMode);
+            undoGroups.push(1);
             isDraggingLine = true;
         } else {
             e.preventDefault();
