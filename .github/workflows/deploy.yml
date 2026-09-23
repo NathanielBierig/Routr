@@ -25,16 +25,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Inject Mapbox token (from repo secret, never committed)
-        # `tr -d` strips any embedded newline/carriage-return from the
-        # secret's stored value before it lands inside the JS string
-        # literal - a secret pasted with a trailing newline (easy to do
-        # by accident) otherwise breaks the string across two lines,
-        # producing a "Unexpected EOF" syntax error that aborts the
-        # entire script before the map ever initializes.
+        # `tr -d` strips embedded newlines/carriage-returns AND literal
+        # quote characters from the secret's stored value before it lands
+        # inside the JS string literal below. The MAPBOX_TOKEN secret was
+        # apparently saved with a trailing newline AND literal surrounding
+        # quotes (e.g. from copy-pasting `"pk...";` including the quote
+        # marks, rather than just the bare token) - either one breaks the
+        # generated string literal (a raw newline splits it across two
+        # lines; embedded quotes prematurely close/reopen it), producing a
+        # syntax error that aborts the entire script before the map ever
+        # initializes. Using `env:` here (rather than interpolating the
+        # secret directly into the run command's text) also avoids a shell
+        # injection risk: a secret value containing shell metacharacters
+        # would otherwise be spliced directly into the command line.
         env:
           MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
         run: |
-          CLEAN_TOKEN=$(printf '%s' "$MAPBOX_TOKEN" | tr -d '\n\r')
+          CLEAN_TOKEN=$(printf '%s' "$MAPBOX_TOKEN" | tr -d "\n\r'\"")
           echo "const MAPBOX_TOKEN = \"$CLEAN_TOKEN\";" > tokens.js
 
       - name: Upload site
