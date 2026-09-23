@@ -4,7 +4,7 @@
 // This surfaces any JS error, unhandled promise rejection, or Mapbox error
 // directly on the page itself, in plain text, so a report can include the
 // actual error message instead of just "it doesn't work."
-function showDebugBanner(message) {
+function showDebugBanner(message, opts) {
     let banner = document.getElementById("debugBanner");
     if (!banner) {
         banner = document.createElement("div");
@@ -23,8 +23,23 @@ function showDebugBanner(message) {
         banner.appendChild(closeBtn);
         document.body.appendChild(banner);
     }
+    // Collapse repeats of the same message into a "xN" counter instead of
+    // one new line per occurrence - a single failed tileset can fire the
+    // underlying error once per in-flight tile request (dozens at once),
+    // which otherwise floods the banner with 30+ identical lines.
+    if (opts && opts.dedup) {
+        const lastLine = banner.lastElementChild;
+        if (lastLine && lastLine.dataset && lastLine.dataset.rawMessage === message) {
+            const count = parseInt(lastLine.dataset.count || "1", 10) + 1;
+            lastLine.dataset.count = String(count);
+            lastLine.textContent = `${message} (x${count})`;
+            return;
+        }
+    }
     const line = document.createElement("div");
     line.textContent = message;
+    line.dataset.rawMessage = message;
+    line.dataset.count = "1";
     banner.appendChild(line);
 }
 
@@ -77,17 +92,62 @@ const map = new mapboxgl.Map({
 // less GPU capability and keeps the same dark aesthetic (no 3D lighting
 // config, so the lightPreset/fog/projection calls tuned for Standard don't
 // apply to it - that's fine, dark-v11 doesn't need them to render dark).
-let usedFallbackStyle = false;
+// Both mapbox://styles/mapbox/standard AND every classic style (dark-v11
+// included) declare a "composite" source that bundles several tilesets
+// into one mapbox://a,b,c URL - that's baked into Mapbox's own official
+// style JSON, not something this app controls. If an account can't access
+// composite/multi-tileset requests (confirmed via direct testing: single-
+// tileset requests succeed, the identical composite request 403s, on both
+// the Standard and dark-v11 tileset bundles) - a real, observed Mapbox
+// account-permission state distinct from an invalid/restricted token -
+// then EVERY official Mapbox style fails the same way, and dark-v11 alone
+// isn't a real fallback. This minimal style below only references a
+// single tileset (mapbox.mapbox-streets-v8), confirmed independently
+// reachable, so it survives that condition. It's deliberately simple -
+// roads, water, parks, buildings, labels - not a full design, just enough
+// to route-plan by while the account-level issue gets resolved.
+const MINIMAL_FALLBACK_STYLE = {
+    version: 8,
+    name: "Routr Minimal Fallback",
+    sources: {
+        streets: { type: "vector", url: "mapbox://mapbox.mapbox-streets-v8" }
+    },
+    glyphs: "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+    layers: [
+        { id: "background", type: "background", paint: { "background-color": "#0f0f15" } },
+        { id: "water", type: "fill", source: "streets", "source-layer": "water", paint: { "fill-color": "#0a1a2a" } },
+        { id: "landuse-park", type: "fill", source: "streets", "source-layer": "landuse", filter: ["==", ["get", "class"], "park"], paint: { "fill-color": "#12241a" } },
+        { id: "building", type: "fill", source: "streets", "source-layer": "building", paint: { "fill-color": "#1a1a26", "fill-opacity": 0.8 } },
+        { id: "road-minor", type: "line", source: "streets", "source-layer": "road", filter: ["in", ["get", "class"], ["literal", ["street", "street_limited", "service", "track", "path"]]], paint: { "line-color": "#2a2a3a", "line-width": 1 } },
+        { id: "road-major", type: "line", source: "streets", "source-layer": "road", filter: ["in", ["get", "class"], ["literal", ["primary", "secondary", "tertiary", "trunk"]]], paint: { "line-color": "#3a3a4a", "line-width": 1.5 } },
+        { id: "road-motorway", type: "line", source: "streets", "source-layer": "road", filter: ["==", ["get", "class"], "motorway"], paint: { "line-color": "#4a4a5a", "line-width": 2 } },
+        { id: "place-label", type: "symbol", source: "streets", "source-layer": "place_label", layout: { "text-field": ["get", "name"], "text-size": 12 }, paint: { "text-color": "#8888aa", "text-halo-color": "#0f0f15", "text-halo-width": 1 } },
+        { id: "road-label", type: "symbol", source: "streets", "source-layer": "road_label", layout: { "text-field": ["get", "name"], "text-size": 10, "symbol-placement": "line" }, paint: { "text-color": "#666680", "text-halo-color": "#0f0f15", "text-halo-width": 1 } }
+    ]
+};
+
+let styleFallbackTier = 0;
 map.on("error", (e) => {
     const msg = (e && e.error && e.error.message) || "unknown error";
     console.error("Mapbox error:", e && e.error);
-    showDebugBanner(`Mapbox error: ${msg}`);
-    if (!usedFallbackStyle) {
-        usedFallbackStyle = true;
+    // Dedup: a single failed composite tileset can fire this once per
+    // in-flight tile request (dozens at once), which used to flood the
+    // on-screen banner with the same line repeated 30+ times - unreadable,
+    // and real wasted DOM work on top of the actual problem.
+    showDebugBanner(`Mapbox error: ${msg}`, { dedup: true });
+
+    if (styleFallbackTier === 0) {
+        styleFallbackTier = 1;
         console.warn("Falling back to mapbox://styles/mapbox/dark-v11 after a map error.");
-        showDebugBanner("Falling back to a simpler map style...");
+        showDebugBanner("Falling back to a simpler map style...", { dedup: true });
         map.setStyle("mapbox://styles/mapbox/dark-v11");
+    } else if (styleFallbackTier === 1) {
+        styleFallbackTier = 2;
+        console.warn("dark-v11 also failed - falling back to a minimal single-tileset style.");
+        showDebugBanner("That also failed - switching to a minimal map style...", { dedup: true });
+        map.setStyle(MINIMAL_FALLBACK_STYLE);
     }
+    // styleFallbackTier === 2: already on the minimal style, nothing further to fall back to.
 });
 
 // State
@@ -1515,9 +1575,12 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
     }
 });
 
-document.getElementById("moreMenuBtn").addEventListener("click", function () {
-    document.getElementById("moreMenu").classList.toggle("hidden");
-});
+function toggleMoreMenuPanel() {
+    document.getElementById("moreMenuPanel").classList.toggle("hidden");
+}
+
+document.getElementById("moreMenuBtn").addEventListener("click", toggleMoreMenuPanel);
+document.getElementById("closeMoreMenuBtn").addEventListener("click", toggleMoreMenuPanel);
 
 // Explicit, opt-in action - unlike the on-load map centering (which only
 // pans the camera), this actually adds the user's current GPS position as
@@ -1549,19 +1612,22 @@ document.getElementById("addCurrentLocationBtn").addEventListener("click", funct
     );
 });
 
-document.getElementById("reorderBtn").addEventListener("click", toggleReorderPanel);
+document.getElementById("reorderBtn").addEventListener("click", () => {
+    document.getElementById("moreMenuPanel").classList.add("hidden");
+    toggleReorderPanel();
+});
 
 document.getElementById("closeReorderBtn").addEventListener("click", toggleReorderPanel);
 
 document.getElementById("directionsBtn").addEventListener("click", () => {
-    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("moreMenuPanel").classList.add("hidden");
     toggleDirectionsPanel();
 });
 
 document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDirectionsPanel);
 
 document.getElementById("myRoutesBtn").addEventListener("click", () => {
-    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("moreMenuPanel").classList.add("hidden");
     document.getElementById("myRoutesPanel").classList.remove("hidden");
     renderMyRoutesList();
 });
