@@ -1,3 +1,59 @@
+// On-screen error banner: with no live device/remote-debugging access
+// available for reproducing a mobile-only "map won't load" report, silent
+// console.error/console.warn calls are useless - nobody can read them.
+// This surfaces any JS error, unhandled promise rejection, or Mapbox error
+// directly on the page itself, in plain text, so a report can include the
+// actual error message instead of just "it doesn't work."
+function showDebugBanner(message) {
+    let banner = document.getElementById("debugBanner");
+    if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "debugBanner";
+        banner.style.cssText =
+            "position:fixed;top:0;left:0;right:0;z-index:9999;" +
+            "background:#3a0a0a;color:#ffb4b4;font:12px/1.4 monospace;" +
+            "padding:10px 40px 10px 12px;max-height:40vh;overflow-y:auto;" +
+            "white-space:pre-wrap;word-break:break-word;border-bottom:2px solid #ff4444;";
+        const closeBtn = document.createElement("button");
+        closeBtn.textContent = "×";
+        closeBtn.style.cssText =
+            "position:absolute;top:4px;right:8px;background:none;border:none;" +
+            "color:#ffb4b4;font-size:22px;cursor:pointer;padding:0 6px;line-height:1;";
+        closeBtn.addEventListener("click", () => banner.remove());
+        banner.appendChild(closeBtn);
+        document.body.appendChild(banner);
+    }
+    const line = document.createElement("div");
+    line.textContent = message;
+    banner.appendChild(line);
+}
+
+function hasWebGLSupport() {
+    try {
+        const canvas = document.createElement("canvas");
+        return !!(window.WebGLRenderingContext &&
+            (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")));
+    } catch (err) {
+        return false;
+    }
+}
+
+window.addEventListener("error", (e) => {
+    showDebugBanner(`JS error: ${e.message} @ ${e.filename ? e.filename.split("/").pop() : "?"}:${e.lineno}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+    const reason = e.reason && e.reason.message ? e.reason.message : e.reason;
+    showDebugBanner(`Unhandled rejection: ${reason}`);
+});
+
+if (!hasWebGLSupport()) {
+    showDebugBanner(
+        "This browser reports no WebGL support, which Mapbox GL JS needs to " +
+        "render the map. Try a different browser, or check for a content/" +
+        "script blocker or a restricted browsing mode."
+    );
+}
+
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
 const map = new mapboxgl.Map({
@@ -23,10 +79,13 @@ const map = new mapboxgl.Map({
 // apply to it - that's fine, dark-v11 doesn't need them to render dark).
 let usedFallbackStyle = false;
 map.on("error", (e) => {
+    const msg = (e && e.error && e.error.message) || "unknown error";
     console.error("Mapbox error:", e && e.error);
+    showDebugBanner(`Mapbox error: ${msg}`);
     if (!usedFallbackStyle) {
         usedFallbackStyle = true;
         console.warn("Falling back to mapbox://styles/mapbox/dark-v11 after a map error.");
+        showDebugBanner("Falling back to a simpler map style...");
         map.setStyle("mapbox://styles/mapbox/dark-v11");
     }
 });
