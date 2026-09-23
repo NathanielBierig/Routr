@@ -76,11 +76,10 @@ body {
 
     #hud.expanded {
         /* Capped at 30% of the viewport, not 80% - the box was covering
-           most of the screen when expanded. Secondary actions moved out
-           to their own slide-in "More" panel (like Reorder/Directions/My
-           Routes already were), so this only ever needs to hold the
-           stats + a few primary toggles, which fit well under 30vh; the
-           scroll still catches anything on an unusually short screen. */
+           most of the screen when expanded. The More dropdown lives
+           inside this same box (not a separate panel), so on a short
+           screen with every secondary button showing, this scrolls
+           internally rather than growing past 30vh. */
         max-height: 30vh;
         overflow-y: auto;
         padding: 12px;
@@ -123,13 +122,17 @@ body {
     gap: 8px;
 }
 
-#moreMenuBody {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
+#moreMenu {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#moreMenu.hidden {
+    display: none;
 }
 
 @media (max-width: 768px) {
@@ -196,7 +199,7 @@ body {
 }
 
 #controls button,
-#moreMenuBody button {
+#moreMenu button {
     padding: 10px 16px;
     background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
     color: white;
@@ -221,7 +224,7 @@ body {
 }
 
 #controls button:hover,
-#moreMenuBody button:hover {
+#moreMenu button:hover {
     background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
     box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
     transform: translateY(-2px);
@@ -255,7 +258,7 @@ body {
     }
 
     #controls button,
-    #moreMenuBody button {
+    #moreMenu button {
         padding: 8px 10px;
         font-size: 10px;
         border-radius: 4px;
@@ -264,8 +267,7 @@ body {
 
 #reorderPanel,
 #directionsPanel,
-#myRoutesPanel,
-#moreMenuPanel {
+#myRoutesPanel {
     position: fixed;
     right: 0;
     top: 0;
@@ -286,30 +288,26 @@ body {
 @media (max-width: 768px) {
     #reorderPanel,
     #directionsPanel,
-    #myRoutesPanel,
-    #moreMenuPanel {
+    #myRoutesPanel {
         width: 100%;
     }
 }
 
 #reorderPanel:not(.hidden),
 #directionsPanel:not(.hidden),
-#myRoutesPanel:not(.hidden),
-#moreMenuPanel:not(.hidden) {
+#myRoutesPanel:not(.hidden) {
     transform: translateX(0);
 }
 
 #reorderPanel.hidden,
 #directionsPanel.hidden,
-#myRoutesPanel.hidden,
-#moreMenuPanel.hidden {
+#myRoutesPanel.hidden {
     display: none;
 }
 
 #reorderHeader,
 #directionsHeader,
-#myRoutesHeader,
-#moreMenuHeader {
+#myRoutesHeader {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -319,8 +317,7 @@ body {
 
 #reorderHeader h2,
 #directionsHeader h2,
-#myRoutesHeader h2,
-#moreMenuHeader h2 {
+#myRoutesHeader h2 {
     margin: 0;
     color: #00ff88;
     font-size: 14px;
@@ -330,8 +327,7 @@ body {
 
 #closeReorderBtn,
 #closeDirectionsBtn,
-#myRoutesCloseBtn,
-#closeMoreMenuBtn {
+#myRoutesCloseBtn {
     background: none;
     border: none;
     color: #b0b0cc;
@@ -347,8 +343,7 @@ body {
 
 #closeReorderBtn:hover,
 #closeDirectionsBtn:hover,
-#myRoutesCloseBtn:hover,
-#closeMoreMenuBtn:hover {
+#myRoutesCloseBtn:hover {
     color: #00ff88;
 }
 

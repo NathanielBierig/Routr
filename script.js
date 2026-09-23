@@ -1574,12 +1574,9 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
     }
 });
 
-function toggleMoreMenuPanel() {
-    document.getElementById("moreMenuPanel").classList.toggle("hidden");
-}
-
-document.getElementById("moreMenuBtn").addEventListener("click", toggleMoreMenuPanel);
-document.getElementById("closeMoreMenuBtn").addEventListener("click", toggleMoreMenuPanel);
+document.getElementById("moreMenuBtn").addEventListener("click", function () {
+    document.getElementById("moreMenu").classList.toggle("hidden");
+});
 
 // Explicit, opt-in action - unlike the on-load map centering (which only
 // pans the camera), this actually adds the user's current GPS position as
@@ -1612,21 +1609,21 @@ document.getElementById("addCurrentLocationBtn").addEventListener("click", funct
 });
 
 document.getElementById("reorderBtn").addEventListener("click", () => {
-    document.getElementById("moreMenuPanel").classList.add("hidden");
+    document.getElementById("moreMenu").classList.add("hidden");
     toggleReorderPanel();
 });
 
 document.getElementById("closeReorderBtn").addEventListener("click", toggleReorderPanel);
 
 document.getElementById("directionsBtn").addEventListener("click", () => {
-    document.getElementById("moreMenuPanel").classList.add("hidden");
+    document.getElementById("moreMenu").classList.add("hidden");
     toggleDirectionsPanel();
 });
 
 document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDirectionsPanel);
 
 document.getElementById("myRoutesBtn").addEventListener("click", () => {
-    document.getElementById("moreMenuPanel").classList.add("hidden");
+    document.getElementById("moreMenu").classList.add("hidden");
     document.getElementById("myRoutesPanel").classList.remove("hidden");
     renderMyRoutesList();
 });
