@@ -1088,6 +1088,21 @@ function updateLayers() {
                 id: glowLayerId,
                 type: "line",
                 source: sourceId,
+                // Standard style's "slot" system controls where a custom
+                // layer sits relative to the style's OWN layers (terrain,
+                // 3D buildings, labels) - layers added without one get
+                // stacked on top of everything, rendered as a flat overlay
+                // that ignores 3D depth entirely. Confirmed via a real
+                // zoomed-in screenshot: the route line was drawing straight
+                // through buildings that should have hidden it, since the
+                // layer wasn't integrated into the 3D scene's draw order at
+                // all. "middle" is Standard's slot for data above
+                // roads/land but below buildings/labels - letting the
+                // route sit on the street surface and get properly
+                // occluded by buildings in front of it. Ignored harmlessly
+                // by styles with no slot concept (dark-v11, the minimal
+                // fallback).
+                slot: "middle",
                 paint: {
                     "line-width": leg.isFallback ? 10 : 18,
                     "line-color": color,
@@ -1116,6 +1131,7 @@ function updateLayers() {
                 id: coreLayerId,
                 type: "line",
                 source: sourceId,
+                slot: "middle",
                 paint: {
                     "line-width": 5,
                     "line-color": color,
