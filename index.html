@@ -24,6 +24,23 @@
 
 <body>
 
+    <!-- Shown until BOTH the user's location has been resolved (or timed
+         out/denied) AND the map style has actually settled (not just the
+         first flicker - a Standard-style load failure triggers a fallback
+         chain that can swap styles once or twice right after the initial
+         load). Without this, the map used to render centered on a
+         hardcoded NJ fallback point, THEN visibly jump to the real
+         location a couple seconds later once geolocation resolved - and
+         separately, a style fallback swap was visible mid-flight as a
+         flash of broken map + red error banner before settling. Better to
+         wait a couple extra seconds than show either. -->
+    <div id="loadingScreen">
+        <div id="loadingContent">
+            <div id="loadingSpinner"></div>
+            <div id="loadingText">Finding your location&hellip;</div>
+        </div>
+    </div>
+
     <!-- Starts expanded (not collapsed) - on mobile the collapsed state is
          just a 52px bar with no visual hint it's tappable, which clipped
          every control (search, toggles, the More menu) below the visible

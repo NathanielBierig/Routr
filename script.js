@@ -1540,10 +1540,41 @@ function renderMyRoutesList() {
     });
 }
 
-// Center on the user's actual location instead of the hardcoded fallback
-// coordinates, if they grant permission. Falls back silently to whatever
-// `center` the map was constructed with (denied/unsupported/timed out) -
-// never blocks map load waiting on this.
+// Loading screen: hidden only once BOTH conditions below are true, so the
+// user never sees the map centered on the hardcoded NJ fallback point and
+// then visibly jump once geolocation resolves, and never sees a style
+// fallback swap (Standard failing -> dark-v11 -> the minimal style) mid-
+// flight as a flash of broken map + red error banner. A hard cap still
+// guarantees this can never hang forever on a stalled network/permission
+// prompt - geolocation's own `timeout` already guarantees its callback
+// fires either way, but the style side has no such built-in guarantee.
+let geoSettled = false;
+let styleSettleTimer = null;
+const LOADING_HARD_CAP_MS = 8000;
+
+function tryHideLoadingScreen() {
+    if (!geoSettled || styleSettleTimer !== "settled") return;
+    const el = document.getElementById("loadingScreen");
+    if (el) el.classList.add("hidden");
+}
+
+// Debounced: every style "load"/"style.load" event (the initial load, and
+// each fallback swap's own load) resets this, so the loading screen keeps
+// waiting through the WHOLE fallback chain rather than revealing after
+// just the first one. Settles 700ms after the last such event fires.
+function scheduleStyleSettle() {
+    if (styleSettleTimer && styleSettleTimer !== "settled") clearTimeout(styleSettleTimer);
+    styleSettleTimer = setTimeout(() => {
+        styleSettleTimer = "settled";
+        tryHideLoadingScreen();
+    }, 700);
+}
+
+setTimeout(() => {
+    const el = document.getElementById("loadingScreen");
+    if (el) el.classList.add("hidden");
+}, LOADING_HARD_CAP_MS);
+
 if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -1551,11 +1582,22 @@ if (navigator.geolocation) {
                 center: [position.coords.longitude, position.coords.latitude],
                 zoom: 14
             });
+            geoSettled = true;
+            tryHideLoadingScreen();
         },
-        () => { /* denied or unavailable - keep the fallback center */ },
-        { timeout: 5000 }
+        () => {
+            // Denied, unavailable, or timed out - keep the fallback center.
+            geoSettled = true;
+            tryHideLoadingScreen();
+        },
+        { timeout: 3000 }
     );
+} else {
+    geoSettled = true;
 }
+
+map.on("load", scheduleStyleSettle);
+map.on("style.load", scheduleStyleSettle);
 
 map.on("load", function () {
     // Mapbox Standard style auto-switches to a 3D globe with atmospheric
