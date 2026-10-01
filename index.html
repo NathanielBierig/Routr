@@ -47,16 +47,20 @@
             <button id="moreMenuBtn">More ▾</button>
         </div>
         <div id="moreMenu" class="hidden">
+            <!-- Route-building actions first (most used while actively
+                 drawing), informational/output actions after (used once a
+                 route already exists), Clear last and isolated since it's
+                 the one destructive action in the menu. -->
+            <button id="undoBtn">Undo</button>
             <button id="addCurrentLocationBtn">📍 Add Current Location</button>
             <button id="suggestRouteBtn">🧭 Suggest a Route</button>
             <button id="reorderBtn">Reorder Points</button>
+            <button id="closeLoopBtn">Close Loop</button>
             <button id="directionsBtn">🧭 Directions</button>
             <button id="elevationBtn">📈 Elevation</button>
             <button id="myRoutesBtn">💾 My Routes</button>
             <button id="exportGpxBtn">⬇️ Export GPX</button>
-            <button id="undoBtn">Undo</button>
             <button id="clearBtn">Clear</button>
-            <button id="closeLoopBtn">Close Loop</button>
         </div>
     </div>
 
