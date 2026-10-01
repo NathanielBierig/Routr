@@ -2,6 +2,48 @@
     box-sizing: border-box;
 }
 
+/* Firefox: themed scrollbar (thumb, track) on every scrollable panel
+   (HUD when overflowing, the side panels' lists) instead of the OS
+   default, which was the one visibly unthemed element left - a plain
+   light-gray bar against an otherwise fully dark/neon UI. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #6366f1 rgba(255, 255, 255, 0.05);
+}
+
+/* Chrome/Safari/Edge: same thing, different API. */
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+*::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+}
+
+/* Keyboard-focus ring: browsers default to a blue/platform-native
+   outline, which (same issue as the scrollbar) was the other visibly
+   unthemed element - jarring against the dark/neon palette whenever a
+   control is reached by Tab instead of a click/tap. :focus-visible
+   (not plain :focus) keeps this scoped to actual keyboard navigation,
+   not every mouse click, matching how the browser's own default
+   behaves. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+    outline: 2px solid #00ff88;
+    outline-offset: 2px;
+}
+
 body {
     margin: 0;
     background: #0f0f15;

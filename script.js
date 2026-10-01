@@ -92,7 +92,13 @@ const map = new mapboxgl.Map({
         }
     },
     center: [-74.01, 40.89],
-    zoom: 13
+    zoom: 13,
+    // Buildings extruding in 3D isn't visible looking straight down even
+    // once the minzoom fix below makes them render further out - height
+    // only reads visually with some camera tilt. 45° shows the 3D effect
+    // immediately on load instead of requiring the user to manually
+    // ctrl-drag to pitch the view themselves.
+    pitch: 45
 });
 
 // The Standard style is 3D/WebGL2-heavy (terrain, lighting presets) and can
@@ -1560,6 +1566,19 @@ map.on("load", function () {
     // keeps route colors at full, undimmed brightness regardless of zoom.
     map.setProjection('mercator');
     map.setFog(null);
+
+    // Mapbox's Standard style doesn't extrude 3D buildings until zoom 15 by
+    // default - with the app's starting zoom of 13, buildings stayed flat
+    // 2D fills until zooming in a lot further. Lowering each building
+    // layer's own minzoom (confirmed via the actual style JSON: 2d-building,
+    // 3d-building, procedural-buildings, building-models all gate at
+    // 15/15/15/14) makes them extrude starting much further out. Guarded by
+    // getLayer() since the fallback styles (dark-v11, the minimal custom
+    // style) have no such layers at all - this only does anything when
+    // Standard actually loaded.
+    ["2d-building", "3d-building", "procedural-buildings", "building-models"].forEach(id => {
+        if (map.getLayer(id)) map.setLayerZoomRange(id, 12, 24);
+    });
 
     // Main route source
     map.addSource("route", {
