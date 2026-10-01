@@ -1092,7 +1092,20 @@ function updateLayers() {
                     "line-width": leg.isFallback ? 10 : 18,
                     "line-color": color,
                     "line-opacity": leg.isFallback ? 0.15 : 0.45,
-                    "line-blur": 3
+                    "line-blur": 3,
+                    // Mapbox GL JS v3's Standard style applies scene-wide 3D
+                    // lighting (the "night" lightPreset's dark ambient
+                    // light) to every layer by default, custom ones
+                    // included - confirmed via a real rendered screenshot
+                    // showing this layer's true paint color (bright neon
+                    // hex values) rendering as dark maroon/brown on screen,
+                    // despite setFog(null) already fixing the earlier
+                    // globe/atmosphere dimming at low zoom. Emissive
+                    // strength 1 makes the layer render at its own true
+                    // color regardless of ambient scene lighting, the way
+                    // neon signage would use emissive material to stay lit
+                    // in the dark rather than reflecting available light.
+                    "line-emissive-strength": 1
                 }
             });
             // Fallback legs (unmapped park/trail interiors with no real
@@ -1107,7 +1120,8 @@ function updateLayers() {
                     "line-width": 5,
                     "line-color": color,
                     "line-opacity": 1,
-                    "line-dasharray": leg.isFallback ? [2, 2] : [1, 0]
+                    "line-dasharray": leg.isFallback ? [2, 2] : [1, 0],
+                    "line-emissive-strength": 1
                 }
             });
         } else {
