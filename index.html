@@ -24,7 +24,14 @@
 
 <body>
 
-    <div id="hud">
+    <!-- Starts expanded (not collapsed) - on mobile the collapsed state is
+         just a 52px bar with no visual hint it's tappable, which clipped
+         every control (search, toggles, the More menu) below the visible
+         area for first-time users. Confirmed via real device-emulated
+         testing: a user who doesn't already know to tap the chevron never
+         finds anything past "Distance: 0 km." Collapsing is still
+         available once a route exists and the user wants more map space. -->
+    <div id="hud" class="expanded">
         <div id="hudToggle">
             <span id="hudSummary">Distance: 0 km</span>
             <span class="chevron">▲</span>

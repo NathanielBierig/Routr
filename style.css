@@ -89,6 +89,17 @@ body {
         margin-bottom: 8px;
     }
 
+    /* #hudSummary and #stats > #distance both say "Distance: X km" - fine
+       when only one is visible (collapsed shows just the summary, nothing
+       else fits), but once expanded both render at once, stacked directly
+       on top of each other with no visual distinction - looked like a
+       rendering glitch in real-device testing. Hide the now-redundant
+       summary text and keep just the chevron, so the bar still works as a
+       collapse control without repeating the real stat beneath it. */
+    #hud.expanded #hudSummary {
+        display: none;
+    }
+
     /* Must come after the base #hudToggle{display:none} rule above -
        same specificity, later source order wins. This block used to sit
        BEFORE the base rule, so display:none always won even on mobile,
@@ -160,7 +171,14 @@ body {
     font-weight: 500;
 }
 
-#controls input {
+/* Scoped to #paceInput specifically, not a bare "input" element selector -
+   the old `#controls input` rule had higher CSS specificity (ID+element)
+   than `#searchInput`'s own rule below it (just an ID), so it silently won
+   regardless of source order and squashed the search box down to 70px -
+   just enough to show "Searc" before the text got clipped. Same class of
+   bug (specificity, not source order) as a previously-fixed #hudToggle
+   issue in this file. */
+#controls #paceInput {
     width: 70px;
     padding: 8px 12px;
     background: rgba(255, 255, 255, 0.05);
@@ -192,7 +210,7 @@ body {
     box-shadow: 0 0 12px rgba(0, 255, 136, 0.2);
 }
 
-#controls input:focus {
+#controls #paceInput:focus {
     outline: none;
     border-color: #00ff88;
     box-shadow: 0 0 12px rgba(0, 255, 136, 0.3);
