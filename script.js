@@ -277,6 +277,23 @@ function updateHUD() {
     document.getElementById("hudSummary").textContent = `Distance: ${distanceInUnit.toFixed(2)} ${unitLabel}`;
 }
 
+// Pans/zooms the map to show the whole route. Clicking points one at a
+// time never needs this (the user is already looking at where they
+// clicked), but a full-route replacement (a suggested route, a loaded
+// saved route) can land anywhere relative to the current view - one
+// casual-user report described a route appearing to "silently fail" to
+// show up after applying a suggestion, which this makes impossible
+// regardless of whether that specific report was a timing fluke.
+function fitMapToRoute() {
+    const points = roadRoute.length >= 2 ? roadRoute : route;
+    if (points.length < 2) return;
+    const bounds = points.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(points[0], points[0])
+    );
+    map.fitBounds(bounds, { padding: 60 });
+}
+
 function updateMarkers() {
     markers.forEach(m => m.remove());
     markers = [];
@@ -739,6 +756,7 @@ async function useSuggestedRoute() {
     await rebuildRoute();
     updateMarkers();
     updateHUD();
+    fitMapToRoute();
 }
 
 let searchMarker = null;
@@ -1476,6 +1494,7 @@ async function loadSavedRoute(id) {
     await rebuildRoute();
     updateMarkers();
     updateHUD();
+    fitMapToRoute();
 }
 
 function deleteSavedRoute(id) {
@@ -1489,7 +1508,7 @@ function renderMyRoutesList() {
     listEl.innerHTML = "";
 
     if (routes.length === 0) {
-        listEl.innerHTML = `<div class="direction-empty">No saved routes yet.</div>`;
+        listEl.innerHTML = `<div class="direction-empty">No saved routes yet - name one above and hit Save. Routes are stored in this browser, so they'll be here next time you open Routr on this device.</div>`;
         return;
     }
 
@@ -1901,10 +1920,16 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
 
     if (isFreehandMode) {
         map.dragPan.disable();
+        // The button turning green was the only feedback freehand mode
+        // gave before actually dragging - easy to miss, especially on a
+        // small screen. A crosshair cursor the instant you hover the map
+        // confirms the mode switched without needing to drag first.
+        map.getCanvas().style.cursor = "crosshair";
         followRoadsBeforeFreehand = isFollowRoads;
         isFollowRoads = false; // freehand strokes are always straight legs
     } else {
         map.dragPan.enable();
+        map.getCanvas().style.cursor = "";
         isFollowRoads = followRoadsBeforeFreehand;
         isCapturingFreehand = false;
         clearFreehandPreview();
