@@ -25,14 +25,16 @@ pace instead of trusting a GPS-corrupted number.
 
 ## Features
 
-- **Draw on the map** — click to add waypoints; each leg snaps to roads by
-  default
+- **Draw on the map** — click to add waypoints (on a phone: press and hold
+  for about half a second, so scrolling and pinching never drop stray
+  points); each leg snaps to roads by default
 - **Freehand draw** — trace a path directly (e.g. around a park loop or
   trail) instead of clicking point by point
 - **Follow Roads toggle** — switch between road-snapped and straight-line
   legs per section of the route
-- **Route sculpting** — drag near an existing line to insert a new point,
-  or drag an existing point to reshape the route around it
+- **Route sculpting** — drag near an existing line to insert a new point
+  (on a phone: press and hold on the line, then drag), or drag an existing
+  point to reshape the route around it
 - **Select & delete a point** — click any waypoint for its address and a
   delete option; the route reconnects automatically
 - **Reorder panel** — drag waypoints into a new order, shown by address

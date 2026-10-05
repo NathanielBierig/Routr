@@ -92,13 +92,7 @@ const map = new mapboxgl.Map({
         }
     },
     center: [-74.01, 40.89],
-    zoom: 13,
-    // Buildings extruding in 3D isn't visible looking straight down even
-    // once the minzoom fix below makes them render further out - height
-    // only reads visually with some camera tilt. 45° shows the 3D effect
-    // immediately on load instead of requiring the user to manually
-    // ctrl-drag to pitch the view themselves.
-    pitch: 45
+    zoom: 13
 });
 
 // The Standard style is 3D/WebGL2-heavy (terrain, lighting presets) and can
@@ -1752,6 +1746,12 @@ function roadRouteIndexToLegIndex(roadRouteIdx) {
 // Single unified click handler - add points
 map.on("click", async function (event) {
     if (isFreehandMode) return; // freehand only commits via drag, not tap
+    // On a touchscreen a quick tap (or the tap that ends a scroll/zoom) must
+    // never drop a point - that's how scrolling the map kept adding stray
+    // points. Touch users add points with a press-and-hold instead (see the
+    // hold handling below). lastTouchTime is stamped in a capture-phase
+    // listener, so it's already fresh by the time Mapbox fires this click.
+    if (Date.now() - lastTouchTime < TOUCH_CLICK_GUARD_MS) return;
     const point = [event.lngLat.lng, event.lngLat.lat];
     await addPoint(point);
 });
@@ -1768,6 +1768,10 @@ document.getElementById("map").addEventListener("mousedown", (e) => {
     // each fighting over the route array and corrupting it. Let marker drags
     // (see updateMarkers()) handle themselves exclusively.
     if (e.target.closest('.mapboxgl-marker')) return;
+
+    // Browsers fire emulated mouse events after a touch; those must not
+    // start a mouse-style line drag (touch has its own press-and-hold path).
+    if (Date.now() - lastTouchTime < TOUCH_CLICK_GUARD_MS) return;
 
     isMouseDown = true;
     dragStartPoint = null;
@@ -1853,18 +1857,107 @@ function endMouseDrag() {
 document.addEventListener("mouseup", endMouseDrag);
 window.addEventListener("blur", endMouseDrag);
 
-// Touch support for mobile drawing
+// Touch support for mobile drawing.
+//
+// Touch interaction model (changed after real phone testing): a plain tap,
+// a swipe, a pinch - anything that isn't a deliberate press-and-hold -
+// only ever moves/zooms the map. Two things used to go wrong: taps (and
+// the tap that ends a scroll) dropped points, and any swipe that started
+// within 40px of the route line was grabbed as a line-drag that inserted a
+// point and froze panning, so scrolling around an existing route kept
+// adding points. Now:
+//   - hold a finger still ~0.4s on empty map  -> drops a point
+//   - hold a finger still ~0.4s on the line   -> "grabs" it; drag to reshape
+//   - moving or adding a second finger before the hold completes cancels it
 let isTouchDown = false;
-let touchStartPoint = null;
+let touchStartPoint = null;       // set only once a hold has grabbed the line
 let touchStartClientPos = null;
-const SCULPT_MOVE_THRESHOLD_PX = 10;
+let lastTouchTime = 0;
+let holdTimer = null;
+let holdStart = null;
+let holdRingEl = null;
+const TOUCH_CLICK_GUARD_MS = 1000;
+const HOLD_MS = 400;
+const HOLD_MOVE_TOLERANCE_PX = 10;   // finger drift allowed while holding
+const LINE_GRAB_RADIUS_PX = 28;      // how close a hold must be to grab the line
+const GRABBED_DRAG_THRESHOLD_PX = 3; // movement after a grab before reshaping
+
+// Stamped in the CAPTURE phase (fires before Mapbox's own handlers) so the
+// click/mouse guards above can tell "this came from a touch" reliably.
+["touchstart", "touchend"].forEach(type => {
+    document.getElementById("map").addEventListener(type, () => { lastTouchTime = Date.now(); }, true);
+});
+
+function showHoldRing(x, y) {
+    removeHoldRing();
+    holdRingEl = document.createElement("div");
+    holdRingEl.className = "hold-ring";
+    holdRingEl.style.left = `${x}px`;
+    holdRingEl.style.top = `${y}px`;
+    document.body.appendChild(holdRingEl);
+}
+
+function removeHoldRing() {
+    if (holdRingEl) {
+        holdRingEl.remove();
+        holdRingEl = null;
+    }
+}
+
+function cancelHold() {
+    if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+        removeHoldRing();
+    }
+    holdStart = null;
+}
+
+// A hold finished while the finger was still down and still.
+async function onHoldFired() {
+    holdTimer = null;
+    if (!holdStart || !isTouchDown) return;
+    const { mapPoint, nearestSegment, x, y } = holdStart;
+    holdStart = null;
+
+    if (navigator.vibrate) navigator.vibrate(15);
+    if (holdRingEl) {
+        holdRingEl.classList.add("fired");
+        const ring = holdRingEl;
+        holdRingEl = null;
+        setTimeout(() => ring.remove(), 400);
+    }
+
+    if (nearestSegment !== -1) {
+        // Held on the line: grab it. The map stops panning so the finger
+        // reshapes the route instead; the point itself is inserted on the
+        // first real movement (see touchmove).
+        touchStartPoint = { segment: nearestSegment, point: mapPoint };
+        touchStartClientPos = { x, y };
+        map.dragPan.disable();
+    } else {
+        await addPoint(mapPoint);
+    }
+}
 
 document.getElementById("map").addEventListener("touchstart", (e) => {
     // Same conflict as the mousedown guard above - a marker's own touch
     // drag must not also trigger our sculpt-drag capture.
     if (e.target.closest('.mapboxgl-marker')) return;
 
+    // A second finger means pinch/rotate: never a hold, never a grab.
+    if (e.touches.length > 1) {
+        cancelHold();
+        if (touchStartPoint && draggedPointIndex === -1) {
+            touchStartPoint = null;
+            touchStartClientPos = null;
+            if (!isFreehandMode) map.dragPan.enable();
+        }
+        return;
+    }
+
     isTouchDown = true;
+    cancelHold();
 
     const touch = e.touches[0];
     const bounds = map.getContainer().getBoundingClientRect();
@@ -1878,7 +1971,7 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
         return;
     }
 
-    let nearestDist = getHitRadiusDegrees(40);
+    let nearestDist = getHitRadiusDegrees(LINE_GRAB_RADIUS_PX);
     let nearestSegment = -1;
 
     for (let i = 0; i < roadRoute.length - 1; i++) {
@@ -1890,19 +1983,11 @@ document.getElementById("map").addEventListener("touchstart", (e) => {
         }
     }
 
-    // Deliberately do NOT preventDefault or commit to sculpt mode here. A
-    // stationary tap must still produce the browser's synthetic click event
-    // so it falls through to map.on("click") -> addPoint() normally.
-    // preventDefault() on touchstart suppresses that synthetic click
-    // entirely, which was silently swallowing any tap landing within the
-    // hit radius of an already-drawn route line - exactly the taps most
-    // likely during a multi-point loop. We only commit to sculpting once
-    // touchmove shows the finger actually moved (see SCULPT_MOVE_THRESHOLD_PX
-    // below).
-    if (nearestSegment !== -1) {
-        touchStartPoint = { segment: nearestSegment, point: mapPoint };
-        touchStartClientPos = { x: touch.clientX, y: touch.clientY };
-    }
+    // Nothing here preventDefaults, so a normal swipe still pans the map and
+    // a pinch still zooms - the hold only fires if the finger stays put.
+    holdStart = { x: touch.clientX, y: touch.clientY, mapPoint, nearestSegment };
+    showHoldRing(touch.clientX, touch.clientY);
+    holdTimer = setTimeout(onHoldFired, HOLD_MS);
 }, false);
 
 document.getElementById("map").addEventListener("touchmove", async (e) => {
@@ -1921,11 +2006,19 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
         return;
     }
 
+    // Still waiting on a hold: any real movement (or a second finger) means
+    // this is a scroll/pan/pinch, not a hold - cancel it and let the map move.
+    if (holdTimer && holdStart) {
+        const moved = Math.hypot(touch.clientX - holdStart.x, touch.clientY - holdStart.y);
+        if (moved > HOLD_MOVE_TOLERANCE_PX || e.touches.length > 1) cancelHold();
+        return;
+    }
+
     if (touchStartPoint) {
         if (draggedPointIndex === -1) {
             const dx = touch.clientX - touchStartClientPos.x;
             const dy = touch.clientY - touchStartClientPos.y;
-            if (Math.hypot(dx, dy) < SCULPT_MOVE_THRESHOLD_PX) return;
+            if (Math.hypot(dx, dy) < GRABBED_DRAG_THRESHOLD_PX) return;
 
             e.preventDefault();
             const legIdx = roadRouteIndexToLegIndex(touchStartPoint.segment);
@@ -1945,8 +2038,13 @@ document.getElementById("map").addEventListener("touchmove", async (e) => {
     }
 }, false);
 
-function endTouchDrag() {
+function endTouchDrag(e) {
+    // touchend fires once per lifted finger; only finish the gesture when the
+    // last one comes up (lifting one finger of a pinch is not the end).
+    if (e && e.touches && e.touches.length > 0) return;
+
     isTouchDown = false;
+    cancelHold();
     if (isFreehandMode) {
         if (isCapturingFreehand) {
             isCapturingFreehand = false;
@@ -1960,7 +2058,13 @@ function endTouchDrag() {
     }
     touchStartPoint = null;
     touchStartClientPos = null;
+    // A grabbed line turns map panning off for the duration of the drag.
+    map.dragPan.enable();
 }
+
+// Stop the browser's long-press context menu / text callout from popping up
+// over a press-and-hold on the map.
+document.getElementById("map").addEventListener("contextmenu", (e) => e.preventDefault());
 
 document.getElementById("map").addEventListener("touchend", endTouchDrag, false);
 
@@ -2030,6 +2134,25 @@ document.getElementById("toggleFreehandBtn").addEventListener("click", function 
 document.getElementById("moreMenuBtn").addEventListener("click", function () {
     document.getElementById("moreMenu").classList.toggle("hidden");
 });
+
+// On phones #moreMenu is a bottom sheet (style.css): close it with its ×
+// button, or by tapping the dimmed area above it (the sheet's ::before scrim,
+// whose clicks land on #moreMenu itself, above the sheet's top edge).
+document.getElementById("closeMoreSheetBtn").addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+});
+document.getElementById("moreMenu").addEventListener("click", (e) => {
+    if (!window.matchMedia("(max-width: 768px)").matches) return;
+    if (e.clientY < e.currentTarget.getBoundingClientRect().top) {
+        e.currentTarget.classList.add("hidden");
+    }
+});
+
+// Touch screens add points by press-and-hold, not click - say so up front.
+if (window.matchMedia("(pointer: coarse)").matches) {
+    const helpText = document.querySelector("#helpOverlay .help-text");
+    if (helpText) helpText.textContent = "👇 Press and hold on the map to drop a point";
+}
 
 // Explicit, opt-in action - unlike the on-load map centering (which only
 // pans the camera), this actually adds the user's current GPS position as
