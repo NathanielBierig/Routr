@@ -95,18 +95,26 @@
         </div>
     </div>
 
+    <!-- On a phone this is a sheet pinned to the TOP of the screen, not a
+         full-screen panel, so the map stays visible underneath: you can pan
+         the map to choose a start point, and once results are in (the
+         "results" state) it shrinks to a slim bar of route options while the
+         selected route is previewed on the map below it. -->
     <div id="suggestPanel" class="hidden">
         <div id="suggestHeader">
             <h2>Suggest a Route</h2>
-            <button id="suggestCloseBtn">×</button>
+            <div id="suggestHeaderActions">
+                <button id="suggestEditBtn">Edit</button>
+                <button id="suggestCloseBtn" aria-label="Close">×</button>
+            </div>
         </div>
         <div id="suggestBody">
             <p class="suggest-hint">
-                Starts from your first route point (or the map center if you
-                haven't placed one yet). Experimental: candidates are scored
-                against real road-snapped distance, but road layout means
-                some will land closer to your target than others.
+                <span id="suggestStartNote"></span>
+                Routes are measured along real roads, so some land closer to
+                your target distance than others.
             </p>
+            <button id="suggestUseLocationBtn">📍 Start from my location</button>
             <label>
                 <span>Target distance (km):</span>
                 <input type="number" id="suggestDistance" value="5" min="1" max="42" step="0.5">
@@ -120,10 +128,15 @@
                 </select>
             </label>
             <button id="suggestGoBtn">Find Routes</button>
+            <div id="suggestSummary"></div>
             <div id="suggestResults"></div>
             <button id="useSuggestedRouteBtn" disabled>Use This Route</button>
         </div>
     </div>
+
+    <!-- Pin marking where suggested routes will start while no route point
+         exists yet (the start is then the map center). -->
+    <div id="suggestCenterPin" class="hidden"><span>📍</span></div>
 
     <div id="elevationPanel" class="hidden">
         <div id="elevationHeader">
@@ -163,6 +176,52 @@
                 <button id="saveRouteConfirmBtn">Save Route</button>
             </div>
             <div id="myRoutesList"></div>
+        </div>
+    </div>
+
+    <!-- "How to use" tab: a floating ? button (bottom-left, clear of the top
+         panel and the map's own attribution) that opens a panel. Lines marked
+         help-touch / help-mouse show only on phones / computers. -->
+    <button id="helpBtn" aria-label="How to use Routr" title="How to use">?</button>
+
+    <div id="helpPanel" class="hidden">
+        <div id="helpHeader">
+            <h2>How to use</h2>
+            <button id="closeHelpBtn" aria-label="Close help">×</button>
+        </div>
+        <div id="helpBody">
+            <section>
+                <h3>Draw a route</h3>
+                <p class="help-mouse">Click the map to drop points. Each new point is joined to the last one along real roads and paths.</p>
+                <p class="help-touch"><b>Press and hold</b> on the map for about half a second - a green ring fills, then a point drops. Quick taps, swipes and pinches only move the map, so you can scroll around freely.</p>
+                <p>The top panel shows distance, walking time and running time as you go. Set your own pace to get an accurate running time.</p>
+            </section>
+            <section>
+                <h3>Reshape it</h3>
+                <p class="help-mouse">Drag any dot to move it, or drag the line itself to pull out a new bend.</p>
+                <p class="help-touch">Drag any dot to move it. To pull the line out into a new bend, <b>press and hold on the line</b> until the ring fires, then drag.</p>
+                <p>Tap a dot to see its address or delete it - the route re-joins around the gap.</p>
+            </section>
+            <section>
+                <h3>Roads or free draw</h3>
+                <p><b>Follow Roads</b> snaps each leg to streets. Switch it off for straight lines through parks and trails.</p>
+                <p><b>Freehand Draw</b> lets you trace a path with your finger or mouse. Map dragging is paused while it's on.</p>
+            </section>
+            <section>
+                <h3>More menu</h3>
+                <ul>
+                    <li><b>Undo</b> removes your last action.</li>
+                    <li><b>Add Current Location</b> drops a point where you are.</li>
+                    <li><b>Suggest a Route</b> finds loops near your start for a distance you choose.</li>
+                    <li><b>Reorder Points</b> changes the order the route visits them.</li>
+                    <li><b>Close Loop</b> joins the last point back to the first.</li>
+                    <li><b>Directions</b> lists the turns and street names.</li>
+                    <li><b>Elevation</b> shows hills, total climb and a difficulty rating.</li>
+                    <li><b>My Routes</b> saves and reloads routes on this device.</li>
+                    <li><b>Export GPX</b> downloads the route for a watch or other app.</li>
+                    <li><b>Clear</b> removes the whole route.</li>
+                </ul>
+            </section>
         </div>
     </div>
 

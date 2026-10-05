@@ -360,6 +360,10 @@ function updateMarkers() {
 
         markers.push(marker);
     });
+
+    // Every route change comes through here, so keep the Suggest Route
+    // panel's start pin/note in step with whether a first point exists.
+    updateSuggestStartInfo();
 }
 
 let activeInfoPopup = null;
@@ -678,6 +682,12 @@ async function suggestRoutes(targetKm, shape) {
             const result = data.routes[0];
             const distanceKm = result.distance / 1000;
             return {
+                // The start these candidates were measured from. Kept on the
+                // option so committing uses THIS point - previewing a route
+                // pans/zooms the map, so re-reading the map center at commit
+                // time (when no route point exists yet) would start the
+                // route somewhere other than where the preview showed.
+                start,
                 waypoints,
                 distanceKm,
                 coordinates: result.geometry.coordinates,
@@ -708,11 +718,16 @@ function showSuggestPreview(option) {
             id: "suggest-preview-line",
             type: "line",
             source: "suggest-preview",
+            // Same two fixes as the real route layers: emissive strength so
+            // Standard's night lighting doesn't dim it to dark olive, and the
+            // "middle" slot so it sits on the street under 3D buildings.
+            slot: "middle",
             paint: {
                 "line-width": 5,
                 "line-color": "#FFD700",
-                "line-opacity": 0.9,
-                "line-dasharray": [2, 1.5]
+                "line-opacity": 0.95,
+                "line-dasharray": [2, 1.5],
+                "line-emissive-strength": 1
             }
         });
     } else {
@@ -722,8 +737,43 @@ function showSuggestPreview(option) {
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(option.coordinates[0], option.coordinates[0])
     );
-    map.fitBounds(bounds, { padding: 60 });
+    map.fitBounds(bounds, { padding: getSuggestFitPadding(), duration: 600 });
     document.getElementById("useSuggestedRouteBtn").disabled = false;
+}
+
+// Padding that keeps the previewed route inside the part of the map that's
+// actually visible: on a phone the suggest sheet covers the top of the
+// screen, on desktop it covers the right-hand 300px. Without this the route
+// was framed against the whole window and ended up hidden behind the panel.
+function getSuggestFitPadding() {
+    const panel = document.getElementById("suggestPanel");
+    if (window.matchMedia("(max-width: 768px)").matches) {
+        const covered = panel.classList.contains("hidden") ? 0 : panel.getBoundingClientRect().height;
+        return { top: covered + 24, bottom: 56, left: 28, right: 28 };
+    }
+    return { top: 60, bottom: 60, left: 60, right: 360 };
+}
+
+// Where suggestions will start from, shown to the user: the first route
+// point if there is one, otherwise a pin at the map center (pan the map to
+// move it). The pin only shows while choosing criteria - once results are in
+// the start is fixed, and the previewed line itself starts there.
+function updateSuggestStartInfo() {
+    const panel = document.getElementById("suggestPanel");
+    const open = !panel.classList.contains("hidden");
+    const choosing = open && !panel.classList.contains("results");
+    const hasRoute = route.length > 0;
+
+    // On phones the sheet sits at the top where the main control panel is;
+    // hide that panel while the sheet is open so its lower half doesn't
+    // peek out underneath.
+    document.body.classList.toggle("suggest-open", open);
+
+    document.getElementById("suggestCenterPin").classList.toggle("hidden", !(choosing && !hasRoute));
+    document.getElementById("suggestUseLocationBtn").classList.toggle("hidden", hasRoute);
+    document.getElementById("suggestStartNote").textContent = hasRoute
+        ? "Starting from your first route point (the green dot)."
+        : "Starting from the pin at the centre of the map - drag the map to move it, or use your location.";
 }
 
 function clearSuggestPreview() {
@@ -739,7 +789,7 @@ function clearSuggestPreview() {
 
 async function useSuggestedRoute() {
     if (!suggestedOption) return;
-    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+    const start = suggestedOption.start;
 
     route.length = 0;
     route.push(start, ...suggestedOption.waypoints, start);
@@ -750,8 +800,11 @@ async function useSuggestedRoute() {
     undoGroups = [route.length];
 
     clearSuggestPreview();
-    document.getElementById("suggestPanel").classList.add("hidden");
+    const panel = document.getElementById("suggestPanel");
+    panel.classList.add("hidden");
+    panel.classList.remove("results");
     document.getElementById("suggestResults").innerHTML = "";
+    document.getElementById("suggestSummary").textContent = "";
 
     await rebuildRoute();
     updateMarkers();
@@ -855,7 +908,8 @@ function updateFreehandPreview() {
             id: "freehand-preview-line",
             type: "line",
             source: "freehand-preview",
-            paint: { "line-width": 6, "line-color": "#00FFFF", "line-opacity": 0.9 }
+            slot: "middle",
+            paint: { "line-width": 6, "line-color": "#00FFFF", "line-opacity": 0.9, "line-emissive-strength": 1 }
         });
     } else {
         map.getSource("freehand-preview").setData(data);
@@ -2066,6 +2120,15 @@ function endTouchDrag(e) {
 // over a press-and-hold on the map.
 document.getElementById("map").addEventListener("contextmenu", (e) => e.preventDefault());
 
+// Belt and braces with the CSS user-select rules: if a long press still
+// manages to start a text selection (older iOS builds), cancel it - except
+// inside form fields, where selecting text is normal.
+document.addEventListener("selectstart", (e) => {
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (el && el.closest && el.closest("input, textarea")) return;
+    e.preventDefault();
+});
+
 document.getElementById("map").addEventListener("touchend", endTouchDrag, false);
 
 // touchcancel fires INSTEAD of touchend when the OS interrupts a gesture
@@ -2148,6 +2211,27 @@ document.getElementById("moreMenu").addEventListener("click", (e) => {
     }
 });
 
+// "How to use" tab. The ? button pulses until it has been opened once
+// (remembered per-device; storage can be blocked, so every access is guarded).
+const HELP_SEEN_KEY = "routr_help_seen";
+const helpBtnEl = document.getElementById("helpBtn");
+try {
+    if (!localStorage.getItem(HELP_SEEN_KEY)) helpBtnEl.classList.add("pulse");
+} catch (err) {
+    helpBtnEl.classList.add("pulse");
+}
+
+helpBtnEl.addEventListener("click", () => {
+    document.getElementById("moreMenu").classList.add("hidden");
+    document.getElementById("helpPanel").classList.remove("hidden");
+    helpBtnEl.classList.remove("pulse");
+    try { localStorage.setItem(HELP_SEEN_KEY, "1"); } catch (err) { /* storage blocked - fine */ }
+});
+
+document.getElementById("closeHelpBtn").addEventListener("click", () => {
+    document.getElementById("helpPanel").classList.add("hidden");
+});
+
 // Touch screens add points by press-and-hold, not click - say so up front.
 if (window.matchMedia("(pointer: coarse)").matches) {
     const helpText = document.querySelector("#helpOverlay .help-text");
@@ -2200,18 +2284,61 @@ document.getElementById("closeDirectionsBtn").addEventListener("click", toggleDi
 
 document.getElementById("suggestRouteBtn").addEventListener("click", () => {
     document.getElementById("moreMenu").classList.add("hidden");
-    document.getElementById("suggestPanel").classList.remove("hidden");
+    const panel = document.getElementById("suggestPanel");
+    panel.classList.remove("hidden", "results");
+    updateSuggestStartInfo();
 });
 
-document.getElementById("suggestCloseBtn").addEventListener("click", () => {
-    document.getElementById("suggestPanel").classList.add("hidden");
+function closeSuggestPanel() {
+    const panel = document.getElementById("suggestPanel");
+    panel.classList.add("hidden");
+    panel.classList.remove("results");
     clearSuggestPreview();
+    document.getElementById("suggestResults").innerHTML = "";
+    document.getElementById("suggestSummary").textContent = "";
+    updateSuggestStartInfo();
+}
+
+document.getElementById("suggestCloseBtn").addEventListener("click", closeSuggestPanel);
+
+// Back from the slim results bar to the criteria form (phones). The previewed
+// route stays on the map until a new search replaces it.
+document.getElementById("suggestEditBtn").addEventListener("click", () => {
+    document.getElementById("suggestPanel").classList.remove("results");
+    updateSuggestStartInfo();
+});
+
+document.getElementById("suggestUseLocationBtn").addEventListener("click", function () {
+    if (!navigator.geolocation) {
+        alert("Geolocation isn't available in this browser.");
+        return;
+    }
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = "📍 Locating...";
+    const reset = () => { btn.disabled = false; btn.textContent = "📍 Start from my location"; };
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            map.jumpTo({
+                center: [position.coords.longitude, position.coords.latitude],
+                zoom: Math.max(map.getZoom(), 14)
+            });
+            reset();
+        },
+        () => {
+            alert("Couldn't get your location - check location permissions for this site.");
+            reset();
+        },
+        { timeout: 10000 }
+    );
 });
 
 document.getElementById("suggestGoBtn").addEventListener("click", async function () {
     const targetKm = parseFloat(document.getElementById("suggestDistance").value) || 5;
-    const shape = document.getElementById("suggestShape").value;
+    const shapeEl = document.getElementById("suggestShape");
+    const shape = shapeEl.value;
     const resultsEl = document.getElementById("suggestResults");
+    const panel = document.getElementById("suggestPanel");
     const btn = this;
 
     clearSuggestPreview();
@@ -2230,7 +2357,7 @@ document.getElementById("suggestGoBtn").addEventListener("click", async function
     options.forEach((opt, i) => {
         const item = document.createElement("div");
         item.className = "suggest-option";
-        item.textContent = `Option ${i + 1}: ${opt.distanceKm.toFixed(2)} km`;
+        item.innerHTML = `<span class="opt-label">Option ${i + 1}</span><span class="opt-km">${opt.distanceKm.toFixed(2)} km</span>`;
         item.addEventListener("click", () => {
             document.querySelectorAll(".suggest-option").forEach(el => el.classList.remove("selected"));
             item.classList.add("selected");
@@ -2238,6 +2365,14 @@ document.getElementById("suggestGoBtn").addEventListener("click", async function
         });
         resultsEl.appendChild(item);
     });
+
+    // Switch to the results state BEFORE framing the preview, so the map is
+    // fitted around the (now much smaller) panel rather than the full form.
+    const shapeNames = { triangle: "triangle loop", square: "square loop", outback: "there and back" };
+    document.getElementById("suggestSummary").textContent =
+        `Looking for ${targetKm} km · ${shapeNames[shape] || shape}`;
+    panel.classList.add("results");
+    updateSuggestStartInfo();
 
     resultsEl.firstChild.classList.add("selected");
     showSuggestPreview(options[0]);

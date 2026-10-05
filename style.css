@@ -2,6 +2,25 @@
     box-sizing: border-box;
 }
 
+/* No text selection / callouts anywhere except form fields. The unprefixed
+   `user-select: none` that used to be the only rule here is ignored by iPhone
+   Safari, which needs the -webkit- form - so a press-and-hold on the map
+   started selecting page text and popping the selection loupe, fighting the
+   hold gesture. Inputs are explicitly exempted: iOS Safari won't let you type
+   into a field that has -webkit-user-select: none. */
+* {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
 /* Firefox: themed scrollbar (thumb, track) on every scrollable panel
    (HUD when overflowing, the side panels' lists) instead of the OS
    default, which was the one visibly unthemed element left - a plain
@@ -565,7 +584,8 @@ body {
 #directionsPanel,
 #myRoutesPanel,
 #elevationPanel,
-#suggestPanel {
+#suggestPanel,
+#helpPanel {
     position: fixed;
     right: 0;
     top: 0;
@@ -588,7 +608,8 @@ body {
     #directionsPanel,
     #myRoutesPanel,
     #elevationPanel,
-    #suggestPanel {
+    #suggestPanel,
+    #helpPanel {
         width: 100%;
     }
 }
@@ -597,7 +618,8 @@ body {
 #directionsPanel:not(.hidden),
 #myRoutesPanel:not(.hidden),
 #elevationPanel:not(.hidden),
-#suggestPanel:not(.hidden) {
+#suggestPanel:not(.hidden),
+#helpPanel:not(.hidden) {
     transform: translateX(0);
 }
 
@@ -605,7 +627,8 @@ body {
 #directionsPanel.hidden,
 #myRoutesPanel.hidden,
 #elevationPanel.hidden,
-#suggestPanel.hidden {
+#suggestPanel.hidden,
+#helpPanel.hidden {
     display: none;
 }
 
@@ -613,7 +636,8 @@ body {
 #directionsHeader,
 #myRoutesHeader,
 #elevationHeader,
-#suggestHeader {
+#suggestHeader,
+#helpHeader {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -625,7 +649,8 @@ body {
 #directionsHeader h2,
 #myRoutesHeader h2,
 #elevationHeader h2,
-#suggestHeader h2 {
+#suggestHeader h2,
+#helpHeader h2 {
     margin: 0;
     color: #00ff88;
     font-size: 14px;
@@ -637,7 +662,8 @@ body {
 #closeDirectionsBtn,
 #myRoutesCloseBtn,
 #closeElevationBtn,
-#suggestCloseBtn {
+#suggestCloseBtn,
+#closeHelpBtn {
     background: none;
     border: none;
     color: #b0b0cc;
@@ -655,7 +681,8 @@ body {
 #closeDirectionsBtn:hover,
 #myRoutesCloseBtn:hover,
 #closeElevationBtn:hover,
-#suggestCloseBtn:hover {
+#suggestCloseBtn:hover,
+#closeHelpBtn:hover {
     color: #00ff88;
 }
 
@@ -792,6 +819,116 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+/* ---- Help ("How to use") tab ---------------------------------------- */
+#helpBtn {
+    position: fixed;
+    left: 12px;
+    bottom: 58px;               /* clears the Mapbox logo in the corner */
+    z-index: 9;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 255, 136, 0.55);
+    background: rgba(20, 20, 30, 0.95);
+    color: #00ff88;
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 12px rgba(0, 255, 136, 0.25);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+#helpBtn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 18px rgba(0, 255, 136, 0.5);
+}
+
+/* Gentle pulse until the tab has been opened once, so first-time users
+   notice it (script.js removes the class and remembers that in localStorage). */
+#helpBtn.pulse {
+    animation: helpPulse 2s ease-in-out infinite;
+}
+
+@keyframes helpPulse {
+    0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(0, 255, 136, 0.55); }
+    50%      { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 10px rgba(0, 255, 136, 0); }
+}
+
+#helpBody {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 20px 24px;
+}
+
+#helpBody section {
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#helpBody section:last-child {
+    border-bottom: none;
+}
+
+#helpBody h3 {
+    margin: 0 0 8px;
+    color: #00ff88;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+#helpBody p,
+#helpBody li {
+    margin: 0 0 8px;
+    color: #c8c8e0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+#helpBody ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+#helpBody li {
+    padding-left: 14px;
+    position: relative;
+}
+
+#helpBody li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.65em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #8b5cf6;
+}
+
+#helpBody b {
+    color: #ffffff;
+}
+
+/* Show touch wording on touchscreens, mouse wording on computers. */
+@media (pointer: coarse) {
+    .help-mouse { display: none; }
+}
+
+@media (pointer: fine) {
+    .help-touch { display: none; }
+}
+
+@media (max-width: 768px) {
+    #helpBtn {
+        bottom: 62px;
+    }
 }
 
 #suggestBody {
@@ -1097,4 +1234,225 @@ input[type="number"] {
 @keyframes snapPulse {
     0% { transform: scale(0.4); opacity: 1; }
     100% { transform: scale(2.2); opacity: 0; }
+}
+/* ---- Suggest a Route: start pin, header actions, phone top sheet -------- */
+#suggestHeaderActions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* "Edit" only exists in the phone results bar (shown further down). */
+#suggestEditBtn {
+    display: none;
+    align-items: center;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(139, 92, 246, 0.7);
+    background: rgba(99, 102, 241, 0.18);
+    color: #e0e0ff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#suggestSummary {
+    display: none;
+}
+
+#suggestUseLocationBtn {
+    padding: 10px 14px;
+    min-height: 44px;
+    border-radius: 6px;
+    border: 1px solid rgba(0, 255, 136, 0.5);
+    background: rgba(0, 255, 136, 0.08);
+    color: #00ff88;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+}
+
+#suggestUseLocationBtn.hidden {
+    display: none;
+}
+
+#suggestCenterPin {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    z-index: 8;
+    transform: translate(-50%, -100%);   /* the pin's tip sits on the map center */
+    font-size: 30px;
+    line-height: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.7));
+}
+
+#suggestCenterPin::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    width: 14px;
+    height: 6px;
+    margin-left: -7px;
+    border-radius: 50%;
+    background: rgba(0, 255, 136, 0.55);
+}
+
+#suggestCenterPin.hidden {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    /* Pinned to the TOP of the screen instead of covering it, so the map
+       (and the start pin, and later the previewed route) stay visible. */
+    #suggestPanel {
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: auto;
+        width: 100%;
+        height: auto;
+        max-height: 64vh;
+        transform: none;
+        border-left: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 0 0 18px 18px;
+        box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+    }
+
+    #suggestPanel:not(.hidden) {
+        transform: none;
+    }
+
+    #suggestHeader {
+        padding: 12px 14px;
+    }
+
+    #suggestBody {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        padding: 2px 14px 14px;
+        overflow-y: auto;
+    }
+
+    #suggestBody .suggest-hint,
+    #suggestUseLocationBtn,
+    #suggestGoBtn,
+    #suggestResults,
+    #useSuggestedRouteBtn,
+    #suggestSummary {
+        grid-column: 1 / -1;
+    }
+
+    #suggestBody .suggest-hint {
+        font-size: 11px;
+    }
+
+    /* Results state: collapse to a slim bar - a row of route options you can
+       swipe through, plus Use This Route - with the map visible below. */
+    #suggestPanel.results #suggestBody .suggest-hint,
+    #suggestPanel.results #suggestUseLocationBtn,
+    #suggestPanel.results #suggestBody label,
+    #suggestPanel.results #suggestGoBtn {
+        display: none;
+    }
+
+    #suggestPanel.results #suggestHeader {
+        padding: 10px 14px 6px;
+    }
+
+    #suggestPanel.results #suggestEditBtn {
+        display: inline-flex;
+    }
+
+    #suggestPanel.results #suggestSummary {
+        display: block;
+        margin-top: -4px;
+        color: #8f8fb3;
+        font-size: 12px;
+    }
+
+    #suggestPanel.results #suggestResults {
+        flex-direction: row;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+    }
+
+    #suggestPanel.results .suggest-option {
+        flex: 0 0 auto;
+        padding: 10px 14px;
+        white-space: nowrap;
+    }
+
+    #suggestPanel.results #suggestBody {
+        padding-top: 0;
+        gap: 8px;
+    }
+}
+
+/* iPhone Safari zooms the whole page when you focus a field whose text is
+   under 16px, and doesn't zoom back - on touch devices keep fields at 16px. */
+@media (pointer: coarse) {
+    #controls #searchInput,
+    #controls #paceInput,
+    #suggestBody input,
+    #suggestBody select,
+    #saveRouteName {
+        font-size: 16px;
+    }
+}
+
+/* Route option cards: label + distance. A row inside the desktop list, a
+   compact stacked chip in the phone results bar (three fit across). */
+.suggest-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.suggest-option .opt-label {
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+.suggest-option .opt-km {
+    font-weight: 700;
+}
+
+@media (max-width: 768px) {
+    /* The sheet takes the top panel's place; don't let the panel show
+       through underneath it. */
+    body.suggest-open #hud {
+        visibility: hidden;
+    }
+
+    #suggestPanel.results #suggestSummary {
+        margin-top: 0;
+        padding-bottom: 2px;
+    }
+
+    #suggestPanel.results .suggest-option {
+        flex: 1 1 0;
+        min-width: 0;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 8px 6px;
+        text-align: center;
+    }
+
+    #suggestPanel.results .suggest-option .opt-label {
+        font-size: 10px;
+    }
+
+    #suggestPanel.results .suggest-option .opt-km {
+        font-size: 15px;
+    }
 }
