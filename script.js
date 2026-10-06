@@ -716,6 +716,13 @@ async function fetchSuggestCandidate(start, waypoints, shape) {
             start,
             shape,
             waypoints,
+            // Where Mapbox actually snapped each intermediate waypoint to the
+            // walking network. Committing the ROUTE with these (not the raw
+            // computed points) matters: the route is rebuilt leg by leg, and
+            // a raw point sitting off the network (a river, a pier) can snap
+            // to a different place for each leg - one live case measured a
+            // 2.5 km leg out and a 17.2 km leg back for a "4.95 km" preview.
+            snappedWaypoints: (data.waypoints || []).slice(1, -1).map(w => w.location),
             distanceKm: result.distance / 1000,
             coordinates: result.geometry.coordinates,
             turns: Math.round(countStepTurns(result) + waypoints.length)
@@ -924,9 +931,13 @@ function clearSuggestPreview() {
 async function useSuggestedRoute() {
     if (!suggestedOption) return;
     const start = suggestedOption.start;
+    const snapped = suggestedOption.snappedWaypoints;
+    const viaPoints = snapped && snapped.length === suggestedOption.waypoints.length && snapped.every(Boolean)
+        ? snapped
+        : suggestedOption.waypoints;
 
     route.length = 0;
-    route.push(start, ...suggestedOption.waypoints, start);
+    route.push(start, ...viaPoints, start);
     legModes.length = 0;
     for (let i = 0; i < route.length - 1; i++) legModes.push(true);
     // Whole suggestion replaces the route as one atomic action, same
