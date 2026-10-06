@@ -91,8 +91,10 @@ const map = new mapboxgl.Map({
             lightPreset: "night"
         }
     },
-    center: [-74.01, 40.89],
-    zoom: 13
+    // Where the map starts when we can't get the user's location (denied,
+    // unavailable, still loading): Times Square.
+    center: [-73.9855, 40.7580],
+    zoom: 14
 });
 
 // The Standard style is 3D/WebGL2-heavy (terrain, lighting presets) and can
@@ -648,60 +650,122 @@ function destinationPoint(lng, lat, bearingDeg, distanceKm) {
 // 1.3 as a rough real-world road-indirection factor - roads rarely run
 // straight toward a target, so a candidate placed at the raw straight-
 // line radius usually comes back SHORTER than target once road-snapped.
+const SUGGEST_INDIRECTION = 1.45; // measured: real walking routes run ~1.4-1.5x the straight-line size
+const SUGGEST_SHAPE_LABELS = { triangle: "Triangle loop", square: "Square loop", outback: "Out & back" };
+
+// shape: "triangle" | "square" | "outback" | "simplest". "simplest" mixes all
+// three (with fewer bearings each, to keep the request count down) and lets
+// the turn count decide which shape wins. Each candidate carries its own
+// `shape` so results can say what they are.
 function buildSuggestCandidateSets(targetKm, shape) {
-    if (shape === "triangle") {
-        const radiusKm = (targetKm / 3) / 1.3;
-        const sets = [];
-        [0, 90, 180, 270].forEach(base => {
-            [110, 140].forEach(spread => sets.push({ radiusKm, bearings: [base, base + spread] }));
-        });
-        return sets;
-    }
-    if (shape === "square") {
-        const radiusKm = (targetKm / 4) / 1.3;
-        return [0, 30, 60, 90].map(base => ({ radiusKm, bearings: [base, base + 90, base + 180] }));
-    }
-    // "outback"
-    const radiusKm = (targetKm / 2) / 1.3;
-    return [0, 45, 90, 135, 180, 225, 270, 315].map(b => ({ radiusKm, bearings: [b] }));
+    const dense = shape !== "simplest";
+    const make = (s, legs, bearingLists) => bearingLists.map(b => ({
+        shape: s,
+        radiusKm: (targetKm / legs) / SUGGEST_INDIRECTION,
+        bearings: b
+    }));
+    const triangle = () => make("triangle", 3,
+        (dense ? [0, 90, 180, 270] : [0, 120, 240]).flatMap(base => [110, 140].map(spread => [base, base + spread])));
+    const square = () => make("square", 4,
+        (dense ? [0, 30, 60, 90] : [0, 30, 60]).map(base => [base, base + 90, base + 180]));
+    const outback = () => make("outback", 2,
+        (dense ? [0, 45, 90, 135, 180, 225, 270, 315] : [0, 60, 120, 180, 240, 300]).map(b => [b]));
+
+    if (shape === "triangle") return triangle();
+    if (shape === "square") return square();
+    if (shape === "outback") return outback();
+    return [...triangle(), ...square(), ...outback()];
 }
 
-async function suggestRoutes(targetKm, shape) {
-    const start = route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
-    const candidateSets = buildSuggestCandidateSets(targetKm, shape);
-
-    const attempts = await Promise.all(candidateSets.map(async ({ radiusKm, bearings }) => {
-        const waypoints = bearings.map(b => destinationPoint(start[0], start[1], b, radiusKm));
-        try {
-            const coords = [start, ...waypoints, start].map(p => p.join(",")).join(";");
-            const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coords}` +
-                `?geometries=geojson&access_token=${mapboxgl.accessToken}`;
-            const response = await fetch(url);
-            const data = await response.json();
-            if (!data.routes || data.routes.length === 0) return null;
-            const result = data.routes[0];
-            const distanceKm = result.distance / 1000;
-            return {
-                // The start these candidates were measured from. Kept on the
-                // option so committing uses THIS point - previewing a route
-                // pans/zooms the map, so re-reading the map center at commit
-                // time (when no route point exists yet) would start the
-                // route somewhere other than where the preview showed.
-                start,
-                waypoints,
-                distanceKm,
-                coordinates: result.geometry.coordinates,
-                diff: Math.abs(distanceKm - targetKm)
-            };
-        } catch (err) {
-            return null;
+// Counts the direction changes a runner has to deal with, from Mapbox's own
+// turn-by-turn steps: real turns (slight bends count half), forks, ends of
+// road and roundabouts - not "continue" / "new name" steps where the road
+// just changes its label. The route's via-waypoints (the corners of the
+// shape) are added by the caller, because Directions reports those as an
+// "arrive" then a "depart" rather than as a turn.
+function countStepTurns(directionsRoute) {
+    let turns = 0;
+    for (const leg of directionsRoute.legs || []) {
+        for (const step of leg.steps || []) {
+            const m = step.maneuver || {};
+            if (m.type === "turn") {
+                if (m.modifier === "straight") continue;
+                turns += (m.modifier === "slight left" || m.modifier === "slight right") ? 0.5 : 1;
+            } else if (["end of road", "fork", "roundabout", "rotary", "roundabout turn"].includes(m.type)) {
+                turns += 1;
+            }
         }
-    }));
+    }
+    return turns;
+}
 
-    return attempts
-        .filter(Boolean)
-        .sort((a, b) => a.diff - b.diff)
-        .slice(0, 3);
+async function fetchSuggestCandidate(start, waypoints, shape) {
+    try {
+        const coords = [start, ...waypoints, start].map(p => p.join(",")).join(";");
+        const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${coords}` +
+            `?geometries=geojson&steps=true&access_token=${mapboxgl.accessToken}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (!data.routes || data.routes.length === 0) return null;
+        const result = data.routes[0];
+        return {
+            // The start these candidates were measured from. Kept on the
+            // option so committing uses THIS point - previewing a route
+            // pans/zooms the map, so re-reading the map center at commit
+            // time would start the route somewhere other than the preview.
+            start,
+            shape,
+            waypoints,
+            distanceKm: result.distance / 1000,
+            coordinates: result.geometry.coordinates,
+            turns: Math.round(countStepTurns(result) + waypoints.length)
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
+// Finds up to 3 routes of about `targetKm` starting (and ending) at `start`,
+// preferring the ones with the fewest turns - the easiest to follow mid-run.
+//   Pass 1: candidate shapes around the start, measured on real roads.
+//   Pass 2: each candidate is rescaled by (target / what it actually
+//           measured) and measured again, so distances land close to what
+//           was asked instead of overshooting by the road-winding factor.
+//   Rank:   routes within tolerance of the target come first, fewest turns
+//           first (closest distance breaks ties); then the nearest misses.
+async function suggestRoutes(targetKm, shape, start) {
+    const sets = buildSuggestCandidateSets(targetKm, shape);
+    const place = (s, radiusKm) => s.bearings.map(b => destinationPoint(start[0], start[1], b, radiusKm));
+
+    const pass1 = (await Promise.all(sets.map(async (s) => {
+        const c = await fetchSuggestCandidate(start, place(s, s.radiusKm), s.shape);
+        return c && { ...c, set: s };
+    }))).filter(Boolean);
+
+    const pass2 = (await Promise.all(pass1.map((c) => {
+        const scale = Math.min(1.8, Math.max(0.5, targetKm / (c.distanceKm || 1)));
+        return fetchSuggestCandidate(start, place(c.set, c.set.radiusKm * scale), c.shape);
+    }))).filter(Boolean);
+
+    const tolerance = Math.max(0.25, targetKm * 0.08);
+    const pool = [...pass1, ...pass2].map(c => {
+        const diff = Math.abs(c.distanceKm - targetKm);
+        return { ...c, diff, inTolerance: diff <= tolerance };
+    });
+    pool.sort((a, b) => (b.inTolerance - a.inTolerance) ||
+        (a.inTolerance ? (a.turns - b.turns || a.diff - b.diff) : a.diff - b.diff));
+
+    // Drop near-identical duplicates (same shape, turns and ~distance).
+    const seen = new Set();
+    const picks = [];
+    for (const c of pool) {
+        const key = `${c.shape}|${c.turns}|${Math.round(c.distanceKm * 20)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        picks.push(c);
+        if (picks.length === 3) break;
+    }
+    return picks;
 }
 
 let suggestedOption = null;
@@ -754,26 +818,96 @@ function getSuggestFitPadding() {
     return { top: 60, bottom: 60, left: 60, right: 360 };
 }
 
-// Where suggestions will start from, shown to the user: the first route
-// point if there is one, otherwise a pin at the map center (pan the map to
-// move it). The pin only shows while choosing criteria - once results are in
-// the start is fixed, and the previewed line itself starts there.
+// Where suggested routes start. Two choices, always spelled out in the panel:
+//   "me"       - the user's current location (a blue dot marks it)
+//   "selected" - a point the user chose: their first route point if they've
+//                placed one, otherwise a pin at the map center (pan to move it)
+// The pin only shows while choosing criteria - once results are in the start
+// is fixed, and the previewed line itself starts there.
+let suggestStartMode = "me";
+let suggestMeLocation = null;   // [lng, lat] once we've found the user
+let suggestMeMarker = null;
+
+function setSuggestMeLocation(lng, lat) {
+    suggestMeLocation = [lng, lat];
+    if (!suggestMeMarker) {
+        const el = document.createElement("div");
+        el.className = "me-dot";
+        suggestMeMarker = new mapboxgl.Marker({ element: el }).setLngLat(suggestMeLocation).addTo(map);
+    } else {
+        suggestMeMarker.setLngLat(suggestMeLocation);
+    }
+}
+
+// Switch the start choice. Choosing "me" looks up the location right away
+// (so the user sees where we think they are) and falls back to "selected"
+// with an explanation if it can't be found.
+async function setSuggestStartMode(mode) {
+    suggestStartMode = mode;
+    updateSuggestStartInfo();
+    if (mode !== "me") return;
+
+    const note = document.getElementById("suggestStartNote");
+    note.textContent = "Finding your location...";
+    try {
+        const here = await locateUser({ timeout: 10000, maximumAge: 60000, enableHighAccuracy: false });
+        if (suggestStartMode !== "me") return; // user switched while we were looking
+        setSuggestMeLocation(here.lng, here.lat);
+        map.jumpTo({ center: [here.lng, here.lat], zoom: Math.max(map.getZoom(), 14) });
+        updateSuggestStartInfo();
+    } catch (err) {
+        showToast(describeGeoError(err));
+        if (suggestStartMode === "me") {
+            suggestStartMode = "selected";
+            updateSuggestStartInfo();
+        }
+    }
+}
+
+// The actual [lng, lat] a search will start from, right now.
+async function resolveSuggestStart() {
+    if (suggestStartMode === "me") {
+        try {
+            const here = await locateUser({ timeout: 10000, maximumAge: 30000, enableHighAccuracy: false });
+            setSuggestMeLocation(here.lng, here.lat);
+            return suggestMeLocation;
+        } catch (err) {
+            if (suggestMeLocation) return suggestMeLocation; // use the last known fix
+            showToast(describeGeoError(err));
+            suggestStartMode = "selected";
+            updateSuggestStartInfo();
+        }
+    }
+    return route.length > 0 ? route[0] : [map.getCenter().lng, map.getCenter().lat];
+}
+
 function updateSuggestStartInfo() {
     const panel = document.getElementById("suggestPanel");
     const open = !panel.classList.contains("hidden");
     const choosing = open && !panel.classList.contains("results");
     const hasRoute = route.length > 0;
+    const me = suggestStartMode === "me";
 
     // On phones the sheet sits at the top where the main control panel is;
     // hide that panel while the sheet is open so its lower half doesn't
     // peek out underneath.
     document.body.classList.toggle("suggest-open", open);
 
-    document.getElementById("suggestCenterPin").classList.toggle("hidden", !(choosing && !hasRoute));
-    document.getElementById("suggestUseLocationBtn").classList.toggle("hidden", hasRoute);
-    document.getElementById("suggestStartNote").textContent = hasRoute
-        ? "Starting from your first route point (the green dot)."
-        : "Starting from the pin at the centre of the map - drag the map to move it, or use your location.";
+    document.getElementById("suggestStartMe").classList.toggle("active", me);
+    document.getElementById("suggestStartPin").classList.toggle("active", !me);
+    document.getElementById("suggestCenterPin").classList.toggle("hidden", !(choosing && !me && !hasRoute));
+    if (suggestMeMarker) {
+        suggestMeMarker.getElement().style.display = (open && me) ? "" : "none";
+    }
+
+    const note = document.getElementById("suggestStartNote");
+    if (me) {
+        if (suggestMeLocation) note.textContent = "Starting from your current location (the blue dot).";
+    } else if (hasRoute) {
+        note.textContent = "Starting from your first route point (the green dot).";
+    } else {
+        note.textContent = "Starting from the pin at the centre of the map - drag the map to move it.";
+    }
 }
 
 function clearSuggestPreview() {
@@ -1619,7 +1753,7 @@ function renderMyRoutesList() {
 }
 
 // Loading screen: hidden only once BOTH conditions below are true, so the
-// user never sees the map centered on the hardcoded NJ fallback point and
+// user never sees the map centered on the default (Times Square) point and
 // then visibly jump once geolocation resolves, and never sees a style
 // fallback swap (Standard failing -> dark-v11 -> the minimal style) mid-
 // flight as a flash of broken map + red error banner. A hard cap still
@@ -1653,26 +1787,88 @@ setTimeout(() => {
     if (el) el.classList.add("hidden");
 }, LOADING_HARD_CAP_MS);
 
-if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            map.jumpTo({
-                center: [position.coords.longitude, position.coords.latitude],
-                zoom: 14
-            });
-            geoSettled = true;
-            tryHideLoadingScreen();
-        },
-        () => {
-            // Denied, unavailable, or timed out - keep the fallback center.
-            geoSettled = true;
-            tryHideLoadingScreen();
-        },
-        { timeout: 3000 }
-    );
-} else {
-    geoSettled = true;
+// ---- Finding the user's location on load --------------------------------
+// The first fix on a phone often takes longer than the 3 seconds this used
+// to allow, and when it timed out the app silently stayed on the default
+// spot forever - no retry, no hint why. Now: a more patient first attempt
+// (accepting a recent cached position, which is instant), a longer
+// background retry that moves the map once a fix arrives if the user hasn't
+// started using it, plain-English feedback when location is blocked, and a
+// locate (◎) button for doing it again by hand.
+function locateUser(options) {
+    return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+            reject({ code: 0 });
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (p) => resolve({ lng: p.coords.longitude, lat: p.coords.latitude }),
+            (err) => reject(err),
+            options
+        );
+    });
 }
+
+function describeGeoError(err) {
+    const code = err && err.code;
+    if (code === 1) return "Location is turned off for this site. Allow it in your phone's settings (see ? Help) to start where you are.";
+    if (code === 2) return "Couldn't work out where you are. Try again in a moment, or tap ◎.";
+    if (code === 3) return "Still looking for your location - tap ◎ to try again.";
+    return "Location isn't available in this browser.";
+}
+
+let toastTimer = null;
+function showToast(message, ms = 6000) {
+    const el = document.getElementById("toast");
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.add("hidden"), ms);
+}
+
+// Did the user pan/zoom the map themselves? (movestart has originalEvent only
+// for user-driven moves, not our own jumpTo/flyTo calls.)
+let userMovedMap = false;
+map.on("movestart", (e) => { if (e.originalEvent) userMovedMap = true; });
+
+(async () => {
+    try {
+        const here = await locateUser({ timeout: 5000, maximumAge: 600000, enableHighAccuracy: false });
+        map.jumpTo({ center: [here.lng, here.lat], zoom: 14 });
+        geoSettled = true;
+        tryHideLoadingScreen();
+        return;
+    } catch (err) {
+        geoSettled = true;
+        tryHideLoadingScreen();
+        showToast(describeGeoError(err));
+        if (err && (err.code === 1 || err.code === 0)) return; // blocked/unsupported: retrying can't help
+    }
+
+    // First attempt timed out or failed to get a fix: keep trying quietly.
+    try {
+        const here = await locateUser({ timeout: 25000, maximumAge: 600000, enableHighAccuracy: false });
+        if (!userMovedMap && route.length === 0) {
+            map.flyTo({ center: [here.lng, here.lat], zoom: 14, duration: 1200 });
+            showToast("Moved to your location.", 3000);
+        } else {
+            showToast("Found your location - tap ◎ to go there.", 5000);
+        }
+    } catch (err) {
+        showToast(describeGeoError(err));
+    }
+})();
+
+// ◎ button: centres the map on the user (and drops a blue dot), any time.
+const geolocateControl = new mapboxgl.GeolocateControl({
+    positionOptions: { enableHighAccuracy: true, timeout: 15000 },
+    trackUserLocation: false,
+    showUserLocation: true,
+    fitBoundsOptions: { maxZoom: 15 }
+});
+map.addControl(geolocateControl, "bottom-right");
+geolocateControl.on("error", (err) => showToast(describeGeoError(err)));
 
 map.on("load", scheduleStyleSettle);
 map.on("style.load", scheduleStyleSettle);
@@ -2151,7 +2347,7 @@ document.getElementById("toggleUnitsBtn").addEventListener("click", function () 
 
     const unitLabel = useMiles ? "mi" : "km";
     this.textContent = `Units: ${unitLabel}`;
-    document.getElementById("paceLabel").textContent = `Running Pace (min/${unitLabel}):`;
+    document.getElementById("paceLabel").textContent = `Pace (min/${unitLabel})`;
 
     updateHUD();
 });
@@ -2286,7 +2482,10 @@ document.getElementById("suggestRouteBtn").addEventListener("click", () => {
     document.getElementById("moreMenu").classList.add("hidden");
     const panel = document.getElementById("suggestPanel");
     panel.classList.remove("hidden", "results");
-    updateSuggestStartInfo();
+    // Runners usually want to start from where they are, so default to the
+    // current location - unless they've already placed a route point, which
+    // is a deliberate choice of start.
+    setSuggestStartMode(route.length > 0 ? "selected" : "me");
 });
 
 function closeSuggestPanel() {
@@ -2308,30 +2507,8 @@ document.getElementById("suggestEditBtn").addEventListener("click", () => {
     updateSuggestStartInfo();
 });
 
-document.getElementById("suggestUseLocationBtn").addEventListener("click", function () {
-    if (!navigator.geolocation) {
-        alert("Geolocation isn't available in this browser.");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    btn.textContent = "📍 Locating...";
-    const reset = () => { btn.disabled = false; btn.textContent = "📍 Start from my location"; };
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            map.jumpTo({
-                center: [position.coords.longitude, position.coords.latitude],
-                zoom: Math.max(map.getZoom(), 14)
-            });
-            reset();
-        },
-        () => {
-            alert("Couldn't get your location - check location permissions for this site.");
-            reset();
-        },
-        { timeout: 10000 }
-    );
-});
+document.getElementById("suggestStartMe").addEventListener("click", () => setSuggestStartMode("me"));
+document.getElementById("suggestStartPin").addEventListener("click", () => setSuggestStartMode("selected"));
 
 document.getElementById("suggestGoBtn").addEventListener("click", async function () {
     const targetKm = parseFloat(document.getElementById("suggestDistance").value) || 5;
@@ -2345,7 +2522,8 @@ document.getElementById("suggestGoBtn").addEventListener("click", async function
     btn.disabled = true;
     resultsEl.innerHTML = `<div class="direction-empty">Finding routes...</div>`;
 
-    const options = await suggestRoutes(targetKm, shape);
+    const start = await resolveSuggestStart();
+    const options = await suggestRoutes(targetKm, shape, start);
     btn.disabled = false;
 
     if (options.length === 0) {
@@ -2354,10 +2532,14 @@ document.getElementById("suggestGoBtn").addEventListener("click", async function
     }
 
     resultsEl.innerHTML = "";
-    options.forEach((opt, i) => {
+    options.forEach((opt) => {
         const item = document.createElement("div");
         item.className = "suggest-option";
-        item.innerHTML = `<span class="opt-label">Option ${i + 1}</span><span class="opt-km">${opt.distanceKm.toFixed(2)} km</span>`;
+        const turnsText = `${opt.turns} turn${opt.turns === 1 ? "" : "s"}`;
+        item.innerHTML =
+            `<span class="opt-main"><span class="opt-label">${SUGGEST_SHAPE_LABELS[opt.shape] || "Route"}</span>` +
+            `<span class="opt-turns">${turnsText}</span></span>` +
+            `<span class="opt-km">${opt.distanceKm.toFixed(2)} km</span>`;
         item.addEventListener("click", () => {
             document.querySelectorAll(".suggest-option").forEach(el => el.classList.remove("selected"));
             item.classList.add("selected");
@@ -2368,9 +2550,9 @@ document.getElementById("suggestGoBtn").addEventListener("click", async function
 
     // Switch to the results state BEFORE framing the preview, so the map is
     // fitted around the (now much smaller) panel rather than the full form.
-    const shapeNames = { triangle: "triangle loop", square: "square loop", outback: "there and back" };
+    const shapeNames = { simplest: "fewest turns", triangle: "triangle loop", square: "square loop", outback: "there and back" };
     document.getElementById("suggestSummary").textContent =
-        `Looking for ${targetKm} km · ${shapeNames[shape] || shape}`;
+        `${targetKm} km from ${suggestStartMode === "me" ? "your location" : "your selected point"} · ${shapeNames[shape] || shape}`;
     panel.classList.add("results");
     updateSuggestStartInfo();
 
@@ -2427,6 +2609,32 @@ document.getElementById("closeLoopBtn").addEventListener("click", closeLoop);
 // only fired on blur/Enter - typing a new pace now updates Running time as
 // you type, not just after you click away from the field.
 document.getElementById("paceInput").addEventListener("input", debounce(updateHUD, 100));
+
+// Pace +/- buttons. Tap to nudge by 0.1 min (6 seconds); hold to keep going.
+// "-" is a faster pace (fewer minutes per km), "+" a slower one.
+(function setUpPaceStepper() {
+    const input = document.getElementById("paceInput");
+    const STEP = 0.1;
+    const nudge = (direction) => {
+        const min = parseFloat(input.min) || 1, max = parseFloat(input.max) || 20;
+        const next = Math.min(max, Math.max(min, getPaceInput() + direction * STEP));
+        input.value = next.toFixed(1);
+        updateHUD();
+    };
+    [["paceDownBtn", -1], ["paceUpBtn", 1]].forEach(([id, direction]) => {
+        const btn = document.getElementById(id);
+        let delay = null, repeat = null;
+        const stop = () => { clearTimeout(delay); clearInterval(repeat); delay = repeat = null; };
+        btn.addEventListener("pointerdown", (e) => {
+            e.preventDefault();               // keep focus/keyboard out of it
+            nudge(direction);
+            delay = setTimeout(() => { repeat = setInterval(() => nudge(direction), 90); }, 400);
+        });
+        ["pointerup", "pointerleave", "pointercancel"].forEach(t => btn.addEventListener(t, stop));
+        // Keyboard users: Enter/Space fire click.
+        btn.addEventListener("click", (e) => { if (e.detail === 0) nudge(direction); });
+    });
+})();
 
 async function triggerSearch(input) {
     if (!input.value.trim()) return;

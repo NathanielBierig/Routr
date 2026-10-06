@@ -61,10 +61,15 @@
         </div>
         <div id="controls">
             <input type="search" id="searchInput" placeholder="Search place..." enterkeyhint="search">
-            <label>
-                <span id="paceLabel">Running Pace (min/km):</span>
-                <input type="number" id="paceInput" value="5" min="1" max="20" step="0.1">
-            </label>
+            <!-- A div, not a <label>: a label forwards clicks on its text to its first button (the minus), which would nudge the pace by accident. -->
+            <div id="paceControl">
+                <span id="paceLabel">Pace (min/km)</span>
+                <div class="pace-stepper">
+                    <button type="button" id="paceDownBtn" aria-label="Faster pace">&minus;</button>
+                    <input type="number" id="paceInput" value="5" min="1" max="20" step="0.1" inputmode="decimal" aria-label="Running pace">
+                    <button type="button" id="paceUpBtn" aria-label="Slower pace">+</button>
+                </div>
+            </div>
             <button id="toggleUnitsBtn">Units: km</button>
             <button id="toggleFollowRoads">Follow Roads: ON</button>
             <button id="toggleFreehandBtn">Freehand Draw: OFF</button>
@@ -114,7 +119,10 @@
                 Routes are measured along real roads, so some land closer to
                 your target distance than others.
             </p>
-            <button id="suggestUseLocationBtn">📍 Start from my location</button>
+            <div id="suggestStartRow" role="group" aria-label="Where to start">
+                <button id="suggestStartMe" class="seg active">📍 My location</button>
+                <button id="suggestStartPin" class="seg">📌 Selected point</button>
+            </div>
             <label>
                 <span>Target distance (km):</span>
                 <input type="number" id="suggestDistance" value="5" min="1" max="42" step="0.5">
@@ -122,7 +130,8 @@
             <label>
                 <span>Shape:</span>
                 <select id="suggestShape">
-                    <option value="triangle" selected>Loop (triangle, 3 legs)</option>
+                    <option value="simplest" selected>Fewest turns (any shape)</option>
+                    <option value="triangle">Loop (triangle, 3 legs)</option>
                     <option value="square">Loop (square, 4 legs)</option>
                     <option value="outback">There and back</option>
                 </select>
@@ -182,6 +191,8 @@
     <!-- "How to use" tab: a floating ? button (bottom-left, clear of the top
          panel and the map's own attribution) that opens a panel. Lines marked
          help-touch / help-mouse show only on phones / computers. -->
+    <div id="toast" class="hidden" role="status"></div>
+
     <button id="helpBtn" aria-label="How to use Routr" title="How to use">?</button>
 
     <div id="helpPanel" class="hidden">
@@ -206,6 +217,13 @@
                 <h3>Roads or free draw</h3>
                 <p><b>Follow Roads</b> snaps each leg to streets. Switch it off for straight lines through parks and trails.</p>
                 <p><b>Freehand Draw</b> lets you trace a path with your finger or mouse. Map dragging is paused while it's on.</p>
+            </section>
+            <section>
+                <h3>Location not working?</h3>
+                <p>Routr starts where you are if you allow location. Tap the <b>◎</b> button (bottom-right) to jump to yourself any time.</p>
+                <p><b>iPhone:</b> Settings → Privacy &amp; Security → Location Services → turn it on, then Safari Websites → While Using the App. Reload the page.</p>
+                <p><b>Android:</b> tap the lock icon in the address bar → Permissions → Location → Allow. Reload the page.</p>
+                <p>If we can't find you, the map starts at Times Square.</p>
             </section>
             <section>
                 <h3>More menu</h3>

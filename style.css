@@ -266,7 +266,7 @@ body {
     }
 }
 
-#controls label {
+#controls #paceControl {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -455,7 +455,7 @@ body {
         z-index: 2;
     }
 
-    #controls label {
+    #controls #paceControl {
         grid-column: span 4;
         flex-direction: row;
         align-items: center;
@@ -1261,23 +1261,6 @@ input[type="number"] {
     display: none;
 }
 
-#suggestUseLocationBtn {
-    padding: 10px 14px;
-    min-height: 44px;
-    border-radius: 6px;
-    border: 1px solid rgba(0, 255, 136, 0.5);
-    background: rgba(0, 255, 136, 0.08);
-    color: #00ff88;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    cursor: pointer;
-}
-
-#suggestUseLocationBtn.hidden {
-    display: none;
-}
-
 #suggestCenterPin {
     position: fixed;
     left: 50%;
@@ -1341,7 +1324,7 @@ input[type="number"] {
     }
 
     #suggestBody .suggest-hint,
-    #suggestUseLocationBtn,
+    #suggestStartRow,
     #suggestGoBtn,
     #suggestResults,
     #useSuggestedRouteBtn,
@@ -1356,7 +1339,7 @@ input[type="number"] {
     /* Results state: collapse to a slim bar - a row of route options you can
        swipe through, plus Use This Route - with the map visible below. */
     #suggestPanel.results #suggestBody .suggest-hint,
-    #suggestPanel.results #suggestUseLocationBtn,
+    #suggestPanel.results #suggestStartRow,
     #suggestPanel.results #suggestBody label,
     #suggestPanel.results #suggestGoBtn {
         display: none;
@@ -1454,5 +1437,185 @@ input[type="number"] {
 
     #suggestPanel.results .suggest-option .opt-km {
         font-size: 15px;
+    }
+}
+
+/* ---- Suggest: start switch, turn counts; location toast; locate button -- */
+#suggestStartRow {
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#suggestStartRow .seg {
+    flex: 1;
+    min-height: 40px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #9a9ac0;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+#suggestStartRow .seg.active {
+    background: rgba(0, 255, 136, 0.15);
+    border-color: rgba(0, 255, 136, 0.55);
+    color: #00ff88;
+}
+
+/* The user's own position while choosing a start. */
+.me-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #3a86ff;
+    border: 3px solid #ffffff;
+    box-shadow: 0 0 0 0 rgba(58, 134, 255, 0.6);
+    animation: meDotPulse 2s ease-out infinite;
+}
+
+@keyframes meDotPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(58, 134, 255, 0.6); }
+    100% { box-shadow: 0 0 0 16px rgba(58, 134, 255, 0); }
+}
+
+.suggest-option .opt-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.suggest-option .opt-turns {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+#suggestPanel.results #suggestStartRow {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    #suggestPanel.results .suggest-option .opt-main {
+        align-items: center;
+    }
+
+    #suggestPanel.results .suggest-option .opt-turns {
+        font-size: 10px;
+    }
+}
+
+/* Short message pill (location problems, "moved to your location"). */
+#toast {
+    position: fixed;
+    left: 50%;
+    bottom: 110px;
+    transform: translateX(-50%);
+    z-index: 30;
+    max-width: min(92vw, 420px);
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: rgba(20, 20, 30, 0.97);
+    border: 1px solid rgba(0, 255, 136, 0.45);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+    color: #e0e0ff;
+    font-size: 13px;
+    line-height: 1.45;
+    text-align: center;
+}
+
+#toast.hidden {
+    display: none;
+}
+
+/* Mapbox's built-in locate (◎) button, restyled to match the dark theme. */
+.mapboxgl-ctrl-group {
+    background: rgba(20, 20, 30, 0.95) !important;
+    border: 1px solid rgba(0, 255, 136, 0.45);
+    border-radius: 12px !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
+    overflow: hidden;
+}
+
+.mapboxgl-ctrl-group button {
+    width: 44px !important;
+    height: 44px !important;
+    background-color: transparent !important;
+}
+
+.mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
+    filter: invert(1) brightness(1.4);
+}
+
+.mapboxgl-ctrl-group button:hover {
+    background-color: rgba(0, 255, 136, 0.12) !important;
+}
+
+/* ---- Pace stepper: - [ 5.0 ] + ------------------------------------------
+   The bare number box was easy to miss and fiddly to edit on a phone (the
+   browser's own up/down arrows were removed to match the theme, leaving
+   nothing to tap). Big +/- buttons let you nudge the pace with a thumb;
+   holding one repeats. Tapping the number still lets you type. */
+.pace-stepper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#controls .pace-stepper button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    font-size: 20px;
+    line-height: 1;
+    letter-spacing: 0;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+#controls .pace-stepper #paceInput {
+    width: 58px;
+    text-align: center;
+    padding: 8px 4px;
+}
+
+@media (max-width: 768px) {
+    #controls #paceControl {
+        grid-column: span 4;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        min-height: 0;
+    }
+
+    #controls .pace-stepper button {
+        width: 38px;
+        min-width: 38px;
+        height: 38px;
+        min-height: 38px;
+    }
+
+    #controls .pace-stepper #paceInput {
+        width: 54px;
+        padding: 6px 2px;
+    }
+}
+
+/* Phone held sideways: the 30%-of-screen cap is only ~117px, which hides the
+   pace row (and everything below it). Allow a bit more height there. */
+@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+    #hud.expanded {
+        max-height: 56vh;
     }
 }
