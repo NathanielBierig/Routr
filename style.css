@@ -308,16 +308,11 @@ body {
     color: #7a7a9e;
 }
 
-#searchInput:focus {
-    outline: none;
-    border-color: #00ff88;
-    box-shadow: 0 0 12px rgba(0, 255, 136, 0.2);
-}
-
+/* Inputs keep the global 2px #00ff88 :focus-visible ring (no outline:none /
+   glow here) so every control shows the same keyboard-focus indicator. */
+#searchInput:focus,
 #controls #paceInput:focus {
-    outline: none;
     border-color: #00ff88;
-    box-shadow: 0 0 12px rgba(0, 255, 136, 0.3);
 }
 
 #controls button,
@@ -330,7 +325,7 @@ body {
     cursor: pointer;
     font-size: 12px;
     font-weight: 600;
-    transition: all 0.2s;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     width: 100%;
@@ -826,7 +821,7 @@ body {
     position: fixed;
     left: 12px;
     bottom: 58px;               /* clears the Mapbox logo in the corner */
-    z-index: 9;
+    z-index: 15;                /* above the HUD (10) so an open More menu can't cover it; below panels (20), toast (30), loading (5000) */
     width: 40px;
     height: 40px;
     padding: 0;
@@ -928,6 +923,7 @@ body {
 @media (max-width: 768px) {
     #helpBtn {
         bottom: 62px;
+        z-index: 9;             /* phone: stay under the HUD's bottom-sheet menu */
     }
 }
 
@@ -1053,7 +1049,7 @@ input[type="number"] {
     color: #e0e0ff;
     font-size: 12px;
     font-weight: 600;
-    transition: all 0.2s;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .suggest-option:hover {

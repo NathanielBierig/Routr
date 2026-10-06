@@ -651,6 +651,7 @@ function destinationPoint(lng, lat, bearingDeg, distanceKm) {
 // straight toward a target, so a candidate placed at the raw straight-
 // line radius usually comes back SHORTER than target once road-snapped.
 const SUGGEST_INDIRECTION = 1.45; // measured: real walking routes run ~1.4-1.5x the straight-line size
+const SUGGEST_MAX_SNAP_M = 250; // a corner that snaps further than this from its computed point is off the network (river, park, pier)
 const SUGGEST_SHAPE_LABELS = { triangle: "Triangle loop", square: "Square loop", outback: "Out & back" };
 
 // shape: "triangle" | "square" | "outback" | "simplest". "simplest" mixes all
@@ -708,7 +709,12 @@ async function fetchSuggestCandidate(start, waypoints, shape) {
         const data = await response.json();
         if (!data.routes || data.routes.length === 0) return null;
         const result = data.routes[0];
+        // Drop candidates whose corners had to snap far from where we put them.
+        const snaps = (data.waypoints || []).slice(1, -1).map(w => w.distance || 0);
+        const maxSnapM = snaps.length ? Math.max(...snaps) : 0;
+        if (maxSnapM > SUGGEST_MAX_SNAP_M) return null;
         return {
+            maxSnapM,
             // The start these candidates were measured from. Kept on the
             // option so committing uses THIS point - previewing a route
             // pans/zooms the map, so re-reading the map center at commit
@@ -742,35 +748,67 @@ async function fetchSuggestCandidate(start, waypoints, shape) {
 //           first (closest distance breaks ties); then the nearest misses.
 async function suggestRoutes(targetKm, shape, start) {
     const sets = buildSuggestCandidateSets(targetKm, shape);
-    const place = (s, radiusKm) => s.bearings.map(b => destinationPoint(start[0], start[1], b, radiusKm));
+    const place = (s, radiusKm, rot) => s.bearings.map(b => destinationPoint(start[0], start[1], b + rot, radiusKm));
 
-    const pass1 = (await Promise.all(sets.map(async (s) => {
-        const c = await fetchSuggestCandidate(start, place(s, s.radiusKm), s.shape);
-        return c && { ...c, set: s };
-    }))).filter(Boolean);
+    // One full two-pass search with every bearing rotated by `rot` degrees.
+    const search = async (rot) => {
+        const pass1 = (await Promise.all(sets.map(async (s) => {
+            const c = await fetchSuggestCandidate(start, place(s, s.radiusKm, rot), s.shape);
+            return c && { ...c, set: s };
+        }))).filter(Boolean);
 
-    const pass2 = (await Promise.all(pass1.map((c) => {
-        const scale = Math.min(1.8, Math.max(0.5, targetKm / (c.distanceKm || 1)));
-        return fetchSuggestCandidate(start, place(c.set, c.set.radiusKm * scale), c.shape);
-    }))).filter(Boolean);
+        const pass2 = (await Promise.all(pass1.map((c) => {
+            const scale = Math.min(1.8, Math.max(0.5, targetKm / (c.distanceKm || 1)));
+            return fetchSuggestCandidate(start, place(c.set, c.set.radiusKm * scale, rot), c.shape);
+        }))).filter(Boolean);
+        return [...pass1, ...pass2];
+    };
 
     const tolerance = Math.max(0.25, targetKm * 0.08);
-    const pool = [...pass1, ...pass2].map(c => {
-        const diff = Math.abs(c.distanceKm - targetKm);
-        return { ...c, diff, inTolerance: diff <= tolerance };
-    });
-    pool.sort((a, b) => (b.inTolerance - a.inTolerance) ||
-        (a.inTolerance ? (a.turns - b.turns || a.diff - b.diff) : a.diff - b.diff));
+    const rank = (list) => {
+        const pool = list.map(c => {
+            const diff = Math.abs(c.distanceKm - targetKm);
+            return { ...c, diff, inTolerance: diff <= tolerance };
+        });
+        pool.sort((a, b) => (b.inTolerance - a.inTolerance) ||
+            (a.inTolerance ? (a.turns - b.turns || a.diff - b.diff) : a.diff - b.diff));
 
-    // Drop near-identical duplicates (same shape, turns and ~distance).
-    const seen = new Set();
-    const picks = [];
-    for (const c of pool) {
-        const key = `${c.shape}|${c.turns}|${Math.round(c.distanceKm * 20)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        picks.push(c);
-        if (picks.length === 3) break;
+        // Drop near-identical duplicates (same shape, turns and ~distance).
+        const seen = new Set();
+        const unique = [];
+        for (const c of pool) {
+            const key = `${c.shape}|${c.turns}|${Math.round(c.distanceKm * 20)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(c);
+        }
+
+        if (shape !== "simplest") return unique.slice(0, 3);
+
+        // "Fewest turns" mixes shapes: the best in-tolerance candidate of each
+        // shape (fewest turns, then closest), ordered by turns. Shapes with no
+        // in-tolerance candidate are filled by the next-best overall.
+        const picks = [];
+        for (const sh of ["outback", "triangle", "square"]) {
+            const best = unique.find(c => c.shape === sh && c.inTolerance);
+            if (best) picks.push(best);
+        }
+        for (const c of unique) {
+            if (picks.length >= 3) break;
+            if (!picks.includes(c)) picks.push(c);
+        }
+        const picked = picks.slice(0, 3);
+        const inTol = picked.filter(c => c.inTolerance).sort((a, b) => a.turns - b.turns || a.diff - b.diff);
+        return [...inTol, ...picked.filter(c => !c.inTolerance)];
+    };
+
+    let all = await search(0);
+    let picks = rank(all);
+    if (picks.length < 3) {
+        // Not enough usable options (corners kept landing off the network):
+        // one more attempt with every bearing rotated, merged in - no looping.
+        all = [...all, ...(await search(25))];
+        picks = rank(all);
     }
     return picks;
 }
@@ -983,7 +1021,8 @@ async function searchPlace(query) {
                 const distMiles = getDistanceInMiles(startPoint[1], startPoint[0], coords[1], coords[0]);
                 if (distMiles > 25) {
                     const searchInput = document.getElementById("searchInput");
-                    searchInput.placeholder = `Too far (${distMiles.toFixed(1)} mi > 25 mi)`;
+                    showToast(`Too far (${distMiles.toFixed(1)} mi > 25 mi)`, 5000);
+                    searchInput.placeholder = "Search place...";
                     searchInput.value = "";
                     return null;
                 }
@@ -1006,7 +1045,8 @@ async function searchPlace(query) {
                 .addTo(map);
 
             const searchInput = document.getElementById("searchInput");
-            searchInput.placeholder = `Located: ${placeName}`;
+            showToast(`Located: ${placeName}`, 5000);
+            searchInput.placeholder = "Search place...";
             searchInput.value = "";
 
             return coords;
@@ -1073,7 +1113,9 @@ function clearFreehandPreview() {
 
 async function commitFreehandPath() {
     if (freehandCapturePath.length < 2) {
+        console.debug("Freehand stroke discarded: captured", freehandCapturePath.length, "point(s)");
         clearFreehandPreview();
+        showToast("Drag a little further to draw a line");
         return;
     }
 
@@ -1822,7 +1864,7 @@ function locateUser(options) {
 
 function describeGeoError(err) {
     const code = err && err.code;
-    if (code === 1) return "Location is turned off for this site. Allow it in your phone's settings (see ? Help) to start where you are.";
+    if (code === 1) return "Location is turned off for this site. Allow it in your browser or device settings (see ? Help) to start where you are.";
     if (code === 2) return "Couldn't work out where you are. Try again in a moment, or tap ◎.";
     if (code === 3) return "Still looking for your location - tap ◎ to try again.";
     return "Location isn't available in this browser.";
@@ -2320,7 +2362,7 @@ function endTouchDrag(e) {
     touchStartPoint = null;
     touchStartClientPos = null;
     // A grabbed line turns map panning off for the duration of the drag.
-    map.dragPan.enable();
+    if (!isFreehandMode) map.dragPan.enable();
 }
 
 // Stop the browser's long-press context menu / text callout from popping up
