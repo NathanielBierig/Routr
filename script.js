@@ -656,8 +656,9 @@ const SUGGEST_SHAPE_LABELS = { triangle: "Triangle loop", square: "Square loop",
 
 // shape: "triangle" | "square" | "outback" | "simplest". "simplest" mixes all
 // three (with fewer bearings each, to keep the request count down) and lets
-// the turn count decide which shape wins. Each candidate carries its own
-// `shape` so results can say what they are.
+// overlap, then turn count, decide which shape wins - an out-and-back only
+// surfaces if nothing less repetitive comes in near the target distance.
+// Each candidate carries its own `shape` so results can say what they are.
 function buildSuggestCandidateSets(targetKm, shape) {
     const dense = shape !== "simplest";
     const make = (s, legs, bearingLists) => bearingLists.map(b => ({
@@ -700,6 +701,38 @@ function countStepTurns(directionsRoute) {
     return turns;
 }
 
+// How much a candidate retraces its own path - a straight out-and-back
+// scores near 1 (every outbound point has a near-twin on the way back),
+// a clean loop scores near 0. Runners generally want to see new ground
+// rather than run the same stretch twice, so this is weighted into ranking
+// ahead of turn count - otherwise an out-and-back (fewest possible turns:
+// one road out, same road back) always wins "fewest turns" regardless of
+// shape preference.
+const OVERLAP_SAMPLE_COUNT = 24;
+const OVERLAP_THRESHOLD_M = 25;        // samples this close together count as "the same ground"
+const OVERLAP_IGNORE_FRACTION = 0.12;  // ignore sample pairs this close together ALONG the route (adjacent points, not real backtrack)
+
+function computeOverlapFraction(coordinates) {
+    const samples = sampleRouteByDistance(coordinates, OVERLAP_SAMPLE_COUNT);
+    if (samples.length < 4) return 0;
+    const total = samples[samples.length - 1].distanceM;
+    if (total === 0) return 0;
+    const minGapM = total * OVERLAP_IGNORE_FRACTION;
+
+    let overlapping = 0;
+    for (let i = 0; i < samples.length; i++) {
+        for (let j = i + 1; j < samples.length; j++) {
+            if (samples[j].distanceM - samples[i].distanceM < minGapM) continue;
+            const d = getDistanceInMiles(samples[i].point[1], samples[i].point[0], samples[j].point[1], samples[j].point[0]) * 1609.34;
+            if (d < OVERLAP_THRESHOLD_M) {
+                overlapping++;
+                break;
+            }
+        }
+    }
+    return overlapping / samples.length;
+}
+
 async function fetchSuggestCandidate(start, waypoints, shape) {
     try {
         const coords = [start, ...waypoints, start].map(p => p.join(",")).join(";");
@@ -731,7 +764,8 @@ async function fetchSuggestCandidate(start, waypoints, shape) {
             snappedWaypoints: (data.waypoints || []).slice(1, -1).map(w => w.location),
             distanceKm: result.distance / 1000,
             coordinates: result.geometry.coordinates,
-            turns: Math.round(countStepTurns(result) + waypoints.length)
+            turns: Math.round(countStepTurns(result) + waypoints.length),
+            overlapFraction: computeOverlapFraction(result.geometry.coordinates)
         };
     } catch (err) {
         return null;
@@ -739,13 +773,15 @@ async function fetchSuggestCandidate(start, waypoints, shape) {
 }
 
 // Finds up to 3 routes of about `targetKm` starting (and ending) at `start`,
-// preferring the ones with the fewest turns - the easiest to follow mid-run.
+// preferring loops over backtracking and, among similarly-polygonal options,
+// the fewest turns - the easiest to follow mid-run.
 //   Pass 1: candidate shapes around the start, measured on real roads.
 //   Pass 2: each candidate is rescaled by (target / what it actually
 //           measured) and measured again, so distances land close to what
 //           was asked instead of overshooting by the road-winding factor.
-//   Rank:   routes within tolerance of the target come first, fewest turns
-//           first (closest distance breaks ties); then the nearest misses.
+//   Rank:   routes within tolerance of the target come first, least
+//           self-overlap first (fewest turns, then closest distance, break
+//           further ties); then the nearest misses by the same order.
 async function suggestRoutes(targetKm, shape, start) {
     const sets = buildSuggestCandidateSets(targetKm, shape);
     const place = (s, radiusKm, rot) => s.bearings.map(b => destinationPoint(start[0], start[1], b + rot, radiusKm));
@@ -770,8 +806,9 @@ async function suggestRoutes(targetKm, shape, start) {
             const diff = Math.abs(c.distanceKm - targetKm);
             return { ...c, diff, inTolerance: diff <= tolerance };
         });
+        const byShapeQuality = (a, b) => a.overlapFraction - b.overlapFraction || a.turns - b.turns || a.diff - b.diff;
         pool.sort((a, b) => (b.inTolerance - a.inTolerance) ||
-            (a.inTolerance ? (a.turns - b.turns || a.diff - b.diff) : a.diff - b.diff));
+            (a.inTolerance ? byShapeQuality(a, b) : a.diff - b.diff));
 
         // Drop near-identical duplicates (same shape, turns and ~distance).
         const seen = new Set();
@@ -783,23 +820,7 @@ async function suggestRoutes(targetKm, shape, start) {
             unique.push(c);
         }
 
-        if (shape !== "simplest") return unique.slice(0, 3);
-
-        // "Fewest turns" mixes shapes: the best in-tolerance candidate of each
-        // shape (fewest turns, then closest), ordered by turns. Shapes with no
-        // in-tolerance candidate are filled by the next-best overall.
-        const picks = [];
-        for (const sh of ["outback", "triangle", "square"]) {
-            const best = unique.find(c => c.shape === sh && c.inTolerance);
-            if (best) picks.push(best);
-        }
-        for (const c of unique) {
-            if (picks.length >= 3) break;
-            if (!picks.includes(c)) picks.push(c);
-        }
-        const picked = picks.slice(0, 3);
-        const inTol = picked.filter(c => c.inTolerance).sort((a, b) => a.turns - b.turns || a.diff - b.diff);
-        return [...inTol, ...picked.filter(c => !c.inTolerance)];
+        return unique.slice(0, 3);
     };
 
     let all = await search(0);
