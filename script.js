@@ -92,8 +92,8 @@ const map = new mapboxgl.Map({
         }
     },
     // Where the map starts when we can't get the user's location (denied,
-    // unavailable, still loading): Times Square.
-    center: [-73.9855, 40.7580],
+    // unavailable, still loading): TLV.
+    center: [32.06815, 34.78326],
     zoom: 14
 });
 
