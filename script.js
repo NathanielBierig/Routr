@@ -10,8 +10,8 @@ const map = new mapboxgl.Map({
             lightPreset: "night"
         }
     },
-    center: [-74.01, 40.89],
-    zoom: 13
+    center: [34.7897, 32.0714], // Carlebach St, Tel Aviv
+    zoom: 15
 });
 
 // State
